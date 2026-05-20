@@ -31,3 +31,14 @@ htmlcov/
 .vscode/
 .idea/
 *.swp
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Generated backtest results (created at runtime)
+results/*.csv
+
+# Claude Code internals
+.claude/
