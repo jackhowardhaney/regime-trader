@@ -1,14 +1,24 @@
-hmmlearn
-alpaca-trade-api
-alpaca-py
-pandas
-numpy
-scipy
-ta
-scikit-learn
-pyyaml
-python-dotenv
-websocket-client
-schedule
-rich
-pytest
+# Core ML / quant
+hmmlearn>=0.3.0
+scikit-learn>=1.3.0
+scipy>=1.11.0
+numpy>=1.24.0
+pandas>=2.0.0
+ta>=0.10.2
+
+# Alpaca broker + data
+alpaca-py>=0.20.0
+
+# Web app
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.0.0
+python-multipart>=0.0.9
+yfinance>=0.2.38
+
+# Config / utilities
+pyyaml>=6.0
+python-dotenv>=1.0.0
+rich>=13.0.0
+schedule>=1.2.0
+websocket-client>=1.7.0

@@ -173,16 +173,19 @@ class MidVolCautiousStrategy(BaseStrategy):
 
 class HighVolDefensiveStrategy(BaseStrategy):
     """
-    Highest-third volatility regime: reduce but stay partially invested.
+    Highest-third volatility regime: reduce exposure based on trend direction.
 
-    Never short — staying 60% long catches the sharp V-shaped rebounds
-    that happen fast and which the HMM is 2-3 days late detecting.
-    Allocation: 60%  |  Leverage: 1.0x
+    Never short — staying partially invested catches V-shaped rebounds.
+    price > 200 EMA (bear market bounce / volatile bull): 45% allocation
+    price < 200 EMA (confirmed downtrend): 20% allocation — near-flat to
+      protect capital; the 200 EMA crossing is the clearest signal that
+      this is a sustained bear move, not just a volatility spike.
     Stop: 50 EMA - 1.0*ATR (wider stop for volatile conditions)
     """
 
     NAME = "HighVolDefensiveStrategy"
-    ALLOCATION = 0.60
+    ALLOCATION_TREND = 0.45
+    ALLOCATION_NO_TREND = 0.20
     LEVERAGE = 1.0
 
     def generate_signal(
@@ -192,7 +195,12 @@ class HighVolDefensiveStrategy(BaseStrategy):
         price = float(bars["close"].iloc[-1])
         atr = self._atr(bars)
         ema50 = self._ema(bars["close"], 50)
+        ema200 = self._ema(bars["close"], 200)
         stop_loss = ema50 - 1.0 * atr
+
+        trend_intact = price > ema200
+        allocation = self.ALLOCATION_TREND if trend_intact else self.ALLOCATION_NO_TREND
+        trend_desc = "above 200 EMA" if trend_intact else "below 200 EMA"
 
         return Signal(
             symbol=symbol,
@@ -201,16 +209,15 @@ class HighVolDefensiveStrategy(BaseStrategy):
             entry_price=price,
             stop_loss=stop_loss,
             take_profit=None,
-            position_size_pct=self.ALLOCATION,
+            position_size_pct=allocation,
             leverage=self.LEVERAGE,
             regime_id=regime_state.state_id,
             regime_name=regime_state.label,
             regime_probability=regime_state.probability,
             timestamp=datetime.utcnow(),
             reasoning=(
-                f"High-vol regime ({regime_state.label}): defensive. "
-                f"Reduced to {self.ALLOCATION*100:.0f}% to limit drawdown; "
-                f"staying LONG for rebound."
+                f"High-vol regime ({regime_state.label}): {trend_desc}. "
+                f"Reduced to {allocation*100:.0f}% at {self.LEVERAGE}x leverage."
             ),
             strategy_name=self.NAME,
         )
@@ -368,3 +375,6 @@ class StrategyOrchestrator:
 
 # Ergonomic alias so existing imports of RegimeStrategyManager still work
 RegimeStrategyManager = StrategyOrchestrator
+
+# Alias used by test_strategies.py
+RegimeAllocation = Signal

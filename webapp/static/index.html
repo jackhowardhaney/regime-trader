@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-950">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Regime Trader</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          gray: {
+            950: '#0a0a0f',
+            900: '#111118',
+            800: '#1a1a24',
+            750: '#1e1e2e',
+            700: '#252535',
+          }
+        }
+      }
+    }
+  };
+</script>
+<style>
+  body { font-family: 'Inter', system-ui, sans-serif; }
+  .tab-active { border-bottom: 2px solid #6366f1; color: #a5b4fc; }
+  .tab-inactive { border-bottom: 2px solid transparent; color: #6b7280; }
+  .tab-inactive:hover { color: #9ca3af; }
+  .card { background: #1a1a24; border: 1px solid #252535; border-radius: 12px; }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 50; display: flex; align-items: center; justify-content: center; }
+  .modal-box { background: #1a1a24; border: 1px solid #252535; border-radius: 16px; padding: 28px; width: 520px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
+  .input { background: #111118; border: 1px solid #252535; border-radius: 8px; color: #e5e7eb; padding: 8px 12px; width: 100%; outline: none; transition: border 0.2s; }
+  .input:focus { border-color: #6366f1; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s; border: none; }
+  .btn-primary { background: #4f46e5; color: #fff; }
+  .btn-primary:hover { background: #4338ca; }
+  .btn-danger { background: #dc2626; color: #fff; }
+  .btn-danger:hover { background: #b91c1c; }
+  .btn-success { background: #16a34a; color: #fff; }
+  .btn-success:hover { background: #15803d; }
+  .btn-ghost { background: transparent; color: #9ca3af; border: 1px solid #252535; }
+  .btn-ghost:hover { background: #252535; color: #e5e7eb; }
+  .badge { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+  .badge-bull { background: #14532d40; color: #4ade80; border: 1px solid #166534; }
+  .badge-bear { background: #7f1d1d40; color: #f87171; border: 1px solid #991b1b; }
+  .badge-neutral { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
+  .pnl-pos { color: #4ade80; }
+  .pnl-neg { color: #f87171; }
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #252535; border-radius: 99px; }
+  .progress-bar { height: 6px; border-radius: 99px; background: #252535; overflow: hidden; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, #4f46e5, #7c3aed); border-radius: 99px; transition: width 0.4s; }
+  .signal-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; margin-bottom: 4px; }
+  .signal-bull { background: #14532d20; }
+  .signal-bear { background: #7f1d1d20; }
+  .signal-neutral { background: #1e293b40; }
+  tr.even { background: #111118; }
+  tr:hover td { background: #1e1e2e !important; }
+</style>
+</head>
+<body class="h-full text-gray-200 antialiased">
+
+<!-- ── Header ── -->
+<header class="border-b border-gray-700 bg-gray-900 sticky top-0 z-40">
+  <div class="max-w-7xl mx-auto px-4 flex items-center h-14 gap-6">
+    <div class="flex items-center gap-2 mr-4">
+      <svg class="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+      </svg>
+      <span class="font-semibold text-white text-lg tracking-tight">Regime Trader</span>
+      <span class="text-xs bg-indigo-900 text-indigo-300 px-2 py-0.5 rounded-full ml-1">PAPER</span>
+    </div>
+    <!-- Tabs -->
+    <nav class="flex gap-1 flex-1">
+      <button onclick="switchTab('watchlist')" id="tab-watchlist" class="tab-active px-4 py-4 text-sm font-medium transition-all">Watchlist</button>
+      <button onclick="switchTab('plays')" id="tab-plays" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">Plays</button>
+      <button onclick="switchTab('backtest')" id="tab-backtest" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">Backtesting</button>
+      <button onclick="switchTab('history')" id="tab-history" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">History</button>
+    </nav>
+    <!-- Portfolio pill -->
+    <div id="portfolio-pill" class="text-sm text-gray-400 flex items-center gap-2">
+      <div class="w-2 h-2 rounded-full bg-gray-600" id="port-dot"></div>
+      <span id="port-label">Connecting…</span>
+    </div>
+    <button onclick="refreshAll()" class="btn btn-ghost text-xs py-1.5 px-3">&#8635; Refresh</button>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-4 py-6">
+
+<!-- ══════════════════════════════════════════════════
+     TAB 1: WATCHLIST
+     ══════════════════════════════════════════════════ -->
+<div id="page-watchlist">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h1 class="text-xl font-semibold text-white">Watchlist</h1>
+      <p class="text-sm text-gray-500 mt-0.5">Live quotes and technical signals. Click any row to analyze.</p>
+    </div>
+    <button onclick="openAddSymbol()" class="btn btn-primary">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      Add Symbol
+    </button>
+  </div>
+
+  <div class="card overflow-hidden">
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
+          <th class="text-left px-4 py-3">Symbol</th>
+          <th class="text-right px-4 py-3">Price</th>
+          <th class="text-right px-4 py-3">Change</th>
+          <th class="text-right px-4 py-3">RSI</th>
+          <th class="text-right px-4 py-3">Signal Score</th>
+          <th class="text-center px-4 py-3">Bias</th>
+          <th class="text-center px-4 py-3">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="watchlist-body">
+        <tr><td colspan="7" class="text-center py-8 text-gray-500">Loading quotes…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="text-xs text-gray-600 mt-2">Prices cached 60s · Signals cached 5min</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TAB 2: PLAYS
+     ══════════════════════════════════════════════════ -->
+<div id="page-plays" class="hidden">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h1 class="text-xl font-semibold text-white">Plays</h1>
+      <p class="text-sm text-gray-500 mt-0.5">Track paper trades and submit orders to Alpaca.</p>
+    </div>
+    <button onclick="openNewPlay()" class="btn btn-primary">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+      New Play
+    </button>
+  </div>
+
+  <!-- Sub-tabs -->
+  <div class="flex gap-4 mb-4 border-b border-gray-700">
+    <button onclick="setPlaysTab('active')" id="plays-tab-active" class="tab-active pb-3 text-sm font-medium">Active</button>
+    <button onclick="setPlaysTab('closed')" id="plays-tab-closed" class="tab-inactive pb-3 text-sm font-medium">Closed</button>
+  </div>
+
+  <div id="plays-active-list" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
+  <div id="plays-closed-list" class="hidden">
+    <div class="card overflow-hidden">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
+            <th class="text-left px-4 py-3">Symbol</th>
+            <th class="text-left px-4 py-3">Dir</th>
+            <th class="text-right px-4 py-3">Entry</th>
+            <th class="text-right px-4 py-3">Exit</th>
+            <th class="text-right px-4 py-3">P&L</th>
+            <th class="text-right px-4 py-3">P&L %</th>
+            <th class="text-left px-4 py-3">Closed</th>
+          </tr>
+        </thead>
+        <tbody id="plays-closed-body">
+          <tr><td colspan="7" class="text-center py-8 text-gray-500">No closed plays</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TAB 3: BACKTESTING
+     ══════════════════════════════════════════════════ -->
+<div id="page-backtest" class="hidden">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h1 class="text-xl font-semibold text-white">Backtesting</h1>
+      <p class="text-sm text-gray-500 mt-0.5">Walk-forward backtest using the HMM regime engine.</p>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+    <!-- Config panel -->
+    <div class="card p-5">
+      <h3 class="font-medium text-white mb-4">Configure Run</h3>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Symbols (comma-separated)</label>
+          <input id="bt-symbols" type="text" class="input" value="SPY,QQQ" />
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Start Date</label>
+          <input id="bt-start" type="date" class="input" value="2020-01-01" />
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">End Date</label>
+          <input id="bt-end" type="date" class="input" value="2024-12-31" />
+        </div>
+        <button onclick="runBacktest()" id="bt-run-btn" class="btn btn-primary w-full justify-center">
+          Run Backtest
+        </button>
+      </div>
+
+      <!-- Progress -->
+      <div id="bt-progress-section" class="hidden mt-4">
+        <div class="flex justify-between text-xs text-gray-500 mb-1">
+          <span>Running…</span><span id="bt-pct">0%</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill" id="bt-progress-bar" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- Error -->
+      <div id="bt-error" class="hidden mt-3 text-xs text-red-400 bg-red-900/20 rounded-lg p-3"></div>
+    </div>
+
+    <!-- Metrics panel -->
+    <div class="card p-5 col-span-2">
+      <h3 class="font-medium text-white mb-4">Latest Results</h3>
+      <div id="bt-metrics" class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
+        <div class="bg-gray-900 rounded-lg p-3">
+          <p class="text-xs text-gray-500">Total Return</p>
+          <p class="text-xl font-bold mt-1" id="bt-m-ret">—</p>
+        </div>
+        <div class="bg-gray-900 rounded-lg p-3">
+          <p class="text-xs text-gray-500">CAGR</p>
+          <p class="text-xl font-bold mt-1" id="bt-m-cagr">—</p>
+        </div>
+        <div class="bg-gray-900 rounded-lg p-3">
+          <p class="text-xs text-gray-500">Sharpe</p>
+          <p class="text-xl font-bold mt-1" id="bt-m-sharpe">—</p>
+        </div>
+        <div class="bg-gray-900 rounded-lg p-3">
+          <p class="text-xs text-gray-500">Max Drawdown</p>
+          <p class="text-xl font-bold mt-1 text-red-400" id="bt-m-dd">—</p>
+        </div>
+      </div>
+      <!-- Regime breakdown -->
+      <div id="bt-regime" class="flex flex-wrap gap-2"></div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
+    <div class="card p-4">
+      <h3 class="font-medium text-white mb-3">Equity Curve</h3>
+      <canvas id="bt-equity-chart" height="200"></canvas>
+    </div>
+    <div class="card p-4">
+      <h3 class="font-medium text-white mb-3">Drawdown</h3>
+      <canvas id="bt-dd-chart" height="200"></canvas>
+    </div>
+  </div>
+
+  <!-- Run history -->
+  <div class="card overflow-hidden">
+    <div class="px-4 py-3 border-b border-gray-700">
+      <h3 class="font-medium text-white">Past Runs</h3>
+    </div>
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="text-gray-500 text-xs uppercase tracking-wider">
+          <th class="text-left px-4 py-3">Date</th>
+          <th class="text-left px-4 py-3">Symbols</th>
+          <th class="text-left px-4 py-3">Period</th>
+          <th class="text-right px-4 py-3">Return</th>
+          <th class="text-right px-4 py-3">Sharpe</th>
+          <th class="text-right px-4 py-3">Max DD</th>
+          <th class="text-right px-4 py-3">Trades</th>
+        </tr>
+      </thead>
+      <tbody id="bt-history-body">
+        <tr><td colspan="7" class="text-center py-6 text-gray-500">No runs yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TAB 4: HISTORY
+     ══════════════════════════════════════════════════ -->
+<div id="page-history" class="hidden">
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h1 class="text-xl font-semibold text-white">Trade History</h1>
+      <p class="text-sm text-gray-500 mt-0.5">Closed plays and P&amp;L analytics.</p>
+    </div>
+    <button onclick="exportHistory()" class="btn btn-ghost text-xs">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+      Export CSV
+    </button>
+  </div>
+
+  <!-- Metric cards -->
+  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
+    <div class="card p-4">
+      <p class="text-xs text-gray-500">Total P&L</p>
+      <p class="text-xl font-bold mt-1" id="h-total-pnl">—</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-gray-500">Trades</p>
+      <p class="text-xl font-bold mt-1" id="h-n-trades">—</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-gray-500">Win Rate</p>
+      <p class="text-xl font-bold mt-1" id="h-win-rate">—</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-gray-500">Profit Factor</p>
+      <p class="text-xl font-bold mt-1" id="h-pf">—</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-gray-500">Avg Win</p>
+      <p class="text-xl font-bold mt-1 pnl-pos" id="h-avg-win">—</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-gray-500">Avg Loss</p>
+      <p class="text-xl font-bold mt-1 pnl-neg" id="h-avg-loss">—</p>
+    </div>
+  </div>
+
+  <!-- Monthly chart -->
+  <div class="card p-4 mb-6">
+    <h3 class="font-medium text-white mb-3">Monthly P&L</h3>
+    <canvas id="h-monthly-chart" height="120"></canvas>
+  </div>
+
+  <!-- Trade log -->
+  <div class="card overflow-hidden">
+    <div class="px-4 py-3 border-b border-gray-700 flex items-center gap-3">
+      <h3 class="font-medium text-white flex-1">Trade Log</h3>
+      <input type="text" placeholder="Filter by symbol…" id="h-filter" oninput="filterHistory()" class="input text-xs py-1.5 w-36" />
+    </div>
+    <table class="w-full text-sm">
+      <thead>
+        <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
+          <th class="text-left px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('symbol')">Symbol</th>
+          <th class="text-left px-4 py-3">Dir</th>
+          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('entry_price')">Entry</th>
+          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('exit_price')">Exit</th>
+          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('shares')">Shares</th>
+          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('pnl')">P&L</th>
+          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('pnl_pct')">P&L %</th>
+          <th class="text-left px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('exit_date')">Closed</th>
+        </tr>
+      </thead>
+      <tbody id="history-body">
+        <tr><td colspan="8" class="text-center py-8 text-gray-500">No closed trades yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</main>
+
+<!-- ══════════════════════════════════════════════════
+     MODAL: Add Symbol
+     ══════════════════════════════════════════════════ -->
+<div id="modal-add-symbol" class="modal-overlay hidden">
+  <div class="modal-box">
+    <h2 class="text-lg font-semibold text-white mb-4">Add to Watchlist</h2>
+    <div class="space-y-3">
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Ticker Symbol</label>
+        <input id="add-sym-input" type="text" class="input" placeholder="e.g. TSLA" onkeydown="if(event.key==='Enter') addSymbol()" />
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Notes (optional)</label>
+        <input id="add-sym-notes" type="text" class="input" placeholder="Why you're watching this" />
+      </div>
+    </div>
+    <div class="flex gap-3 mt-5 justify-end">
+      <button onclick="closeModal('modal-add-symbol')" class="btn btn-ghost">Cancel</button>
+      <button onclick="addSymbol()" class="btn btn-primary">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     MODAL: Signal Analyze
+     ══════════════════════════════════════════════════ -->
+<div id="modal-signals" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold text-white" id="sig-modal-title">Analyzing…</h2>
+      <button onclick="closeModal('modal-signals')" class="text-gray-500 hover:text-white">✕</button>
+    </div>
+    <div id="sig-modal-body">
+      <div class="text-center py-8 text-gray-500">Loading signals…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     MODAL: New Play
+     ══════════════════════════════════════════════════ -->
+<div id="modal-new-play" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold text-white">New Play</h2>
+      <button onclick="closeModal('modal-new-play')" class="text-gray-500 hover:text-white">✕</button>
+    </div>
+    <div class="space-y-3">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Symbol</label>
+          <input id="np-symbol" type="text" class="input" placeholder="AAPL" />
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Direction</label>
+          <select id="np-direction" class="input">
+            <option value="LONG">LONG</option>
+            <option value="SHORT">SHORT</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-3">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Entry Price</label>
+          <input id="np-entry" type="number" step="0.01" class="input" placeholder="0.00" oninput="updateRR()" />
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Stop Loss</label>
+          <input id="np-stop" type="number" step="0.01" class="input" placeholder="0.00" oninput="updateRR()" />
+        </div>
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Take Profit</label>
+          <input id="np-tp" type="number" step="0.01" class="input" placeholder="0.00" oninput="updateRR()" />
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-xs text-gray-500 mb-1">Shares</label>
+          <input id="np-shares" type="number" step="0.01" class="input" placeholder="0" />
+        </div>
+        <div class="flex flex-col justify-end">
+          <div class="bg-gray-900 rounded-lg p-2 text-center">
+            <p class="text-xs text-gray-500">R:R Ratio</p>
+            <p class="text-lg font-bold text-indigo-400" id="np-rr">—</p>
+          </div>
+        </div>
+      </div>
+      <div>
+        <label class="block text-xs text-gray-500 mb-1">Notes</label>
+        <input id="np-notes" type="text" class="input" placeholder="Trade rationale…" />
+      </div>
+      <div class="flex items-center gap-3 bg-gray-900 rounded-lg p-3">
+        <input id="np-submit-order" type="checkbox" class="w-4 h-4 accent-indigo-500" />
+        <div>
+          <p class="text-sm text-white">Submit to Alpaca</p>
+          <p class="text-xs text-gray-500">Places a paper limit order at entry price</p>
+        </div>
+      </div>
+    </div>
+    <div class="flex gap-3 mt-5 justify-end">
+      <button onclick="closeModal('modal-new-play')" class="btn btn-ghost">Cancel</button>
+      <button onclick="submitPlay()" class="btn btn-success">Create Play</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     MODAL: Close Play
+     ══════════════════════════════════════════════════ -->
+<div id="modal-close-play" class="modal-overlay hidden">
+  <div class="modal-box" style="width:360px">
+    <h2 class="text-lg font-semibold text-white mb-4">Close Play</h2>
+    <input type="hidden" id="cp-id" />
+    <div>
+      <label class="block text-xs text-gray-500 mb-1">Exit Price (leave blank for market)</label>
+      <input id="cp-price" type="number" step="0.01" class="input" placeholder="Market price" />
+    </div>
+    <div class="flex gap-3 mt-5 justify-end">
+      <button onclick="closeModal('modal-close-play')" class="btn btn-ghost">Cancel</button>
+      <button onclick="confirmClosePlay()" class="btn btn-danger">Close Position</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     JAVASCRIPT
+     ══════════════════════════════════════════════════ -->
+<script>
+const API = '';   // same origin
+let btEquityChart = null, btDdChart = null, hMonthlyChart = null;
+let historyData = [], historySort = {col:'exit_date', asc:false};
+let playsSubTab = 'active';
+let refreshTimer = null;
+let btPoller = null;
+
+// ── Utility ──────────────────────────────────────────────────────────
+async function api(path, opts={}) {
+  const r = await fetch(API + path, opts);
+  if (!r.ok) {
+    const t = await r.text().catch(()=>'');
+    throw new Error(t || r.statusText);
+  }
+  return r.json();
+}
+
+function fmt$(n) { return n == null ? '—' : '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function fmtPct(n) { return n == null ? '—' : (n>0?'+':'')+Number(n).toFixed(2)+'%'; }
+function fmtDate(s) { if(!s) return '—'; const d=new Date(s); return isNaN(d)?s:d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}); }
+function pnlClass(n) { return n>0?'pnl-pos':n<0?'pnl-neg':'text-gray-400'; }
+function biasClass(b) { return b==='BULLISH'?'badge-bull':b==='BEARISH'?'badge-bear':'badge-neutral'; }
+
+// ── Tabs ──────────────────────────────────────────────────────────────
+const TABS = ['watchlist','plays','backtest','history'];
+function switchTab(t) {
+  TABS.forEach(x=>{
+    document.getElementById('page-'+x).classList.toggle('hidden', x!==t);
+    const btn = document.getElementById('tab-'+x);
+    btn.className = (x===t) ? 'tab-active px-4 py-4 text-sm font-medium transition-all'
+                             : 'tab-inactive px-4 py-4 text-sm font-medium transition-all';
+  });
+  clearInterval(refreshTimer);
+  if(t==='watchlist') {
+    loadWatchlist();
+    refreshTimer = setInterval(loadWatchlist, 60000);
+  } else if(t==='plays') {
+    loadPlays();
+    refreshTimer = setInterval(loadPlays, 15000);
+  } else if(t==='backtest') {
+    loadBtLatest();
+    loadBtHistory();
+  } else if(t==='history') {
+    loadHistory();
+  }
+}
+
+// ── Modals ───────────────────────────────────────────────────────────
+function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') document.querySelectorAll('.modal-overlay').forEach(m=>m.classList.add('hidden')); });
+document.querySelectorAll('.modal-overlay').forEach(el=>el.addEventListener('click',e=>{ if(e.target===el) el.classList.add('hidden'); }));
+
+// ── Portfolio ─────────────────────────────────────────────────────────
+async function loadPortfolio() {
+  try {
+    const p = await api('/api/portfolio');
+    const dot = document.getElementById('port-dot');
+    const lbl = document.getElementById('port-label');
+    if(p.connected) {
+      dot.className = 'w-2 h-2 rounded-full bg-green-400';
+      lbl.innerHTML = `<span class="text-white font-medium">${fmt$(p.equity)}</span> <span class="text-gray-500 ml-1">+${fmt$(p.day_pl)} today</span>`;
+    } else {
+      dot.className = 'w-2 h-2 rounded-full bg-yellow-400';
+      lbl.textContent = 'Alpaca not connected';
+    }
+  } catch(e) {
+    document.getElementById('port-dot').className = 'w-2 h-2 rounded-full bg-red-400';
+    document.getElementById('port-label').textContent = 'Error';
+  }
+}
+
+// ── WATCHLIST ─────────────────────────────────────────────────────────
+async function loadWatchlist() {
+  const tbody = document.getElementById('watchlist-body');
+  try {
+    const quotes = await api('/api/watchlist/quotes');
+    if(!quotes.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-500">No symbols — add one above.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = quotes.map((q,i)=>{
+      const bias = q.overall||'NEUTRAL';
+      const bClass = biasClass(bias);
+      const chgClass = q.change_pct>=0?'pnl-pos':'pnl-neg';
+      const chgPrefix = q.change_pct>=0?'+':'';
+      const rsiColor = q.rsi<30?'text-green-400':q.rsi>70?'text-red-400':'text-gray-300';
+      const bar = Math.max(0,Math.min(100,q.buy_pct||50));
+      const barColor = bar>=60?'bg-green-500':bar<=40?'bg-red-500':'bg-yellow-500';
+      return `<tr class="${i%2===0?'':'even'} cursor-pointer" onclick="analyzeSymbol('${q.symbol}')">
+        <td class="px-4 py-3 font-semibold text-white">${q.symbol}</td>
+        <td class="px-4 py-3 text-right font-mono">${fmt$(q.price)}</td>
+        <td class="px-4 py-3 text-right font-mono ${chgClass}">${chgPrefix}${fmtPct(q.change_pct)}</td>
+        <td class="px-4 py-3 text-right font-mono ${rsiColor}">${q.rsi?Number(q.rsi).toFixed(1):'—'}</td>
+        <td class="px-4 py-3">
+          <div class="flex items-center gap-2">
+            <div class="flex-1 progress-bar"><div class="${barColor} h-full rounded-full transition-all" style="width:${bar}%"></div></div>
+            <span class="text-xs text-gray-400 w-8 text-right">${bar}%</span>
+          </div>
+        </td>
+        <td class="px-4 py-3 text-center"><span class="badge ${bClass}">${bias}</span></td>
+        <td class="px-4 py-3 text-center" onclick="event.stopPropagation()">
+          <div class="flex gap-2 justify-center">
+            <button onclick="analyzeSymbol('${q.symbol}')" class="btn btn-ghost text-xs py-1 px-2">Analyze</button>
+            <button onclick="prefillPlay('${q.symbol}',${q.price||0})" class="btn btn-primary text-xs py-1 px-2">+ Play</button>
+            <button onclick="removeSymbol('${q.symbol}')" class="btn btn-ghost text-xs py-1 px-2 text-red-400 border-red-900 hover:bg-red-900/30">✕</button>
+          </div>
+        </td>
+      </tr>`;
+    }).join('');
+  } catch(e) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center py-8 text-red-400">${e.message}</td></tr>`;
+  }
+}
+
+function openAddSymbol() {
+  document.getElementById('add-sym-input').value = '';
+  document.getElementById('add-sym-notes').value = '';
+  openModal('modal-add-symbol');
+  setTimeout(()=>document.getElementById('add-sym-input').focus(),100);
+}
+
+async function addSymbol() {
+  const sym = document.getElementById('add-sym-input').value.trim().toUpperCase();
+  const notes = document.getElementById('add-sym-notes').value.trim();
+  if(!sym) return;
+  try {
+    await api('/api/watchlist', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol:sym,notes:notes||null})});
+    closeModal('modal-add-symbol');
+    loadWatchlist();
+  } catch(e) { alert(e.message); }
+}
+
+async function removeSymbol(sym) {
+  if(!confirm(`Remove ${sym} from watchlist?`)) return;
+  await api('/api/watchlist/'+sym, {method:'DELETE'});
+  loadWatchlist();
+}
+
+async function analyzeSymbol(sym) {
+  openModal('modal-signals');
+  document.getElementById('sig-modal-title').textContent = sym + ' — Signals';
+  document.getElementById('sig-modal-body').innerHTML = '<div class="text-center py-8 text-gray-500">Loading…</div>';
+  try {
+    const s = await api('/api/signals/'+sym);
+    if(s.error) throw new Error(s.error);
+    const overallClass = biasClass(s.overall);
+    const rsiBar = Math.max(0,Math.min(100,s.rsi));
+    const bbBar = Math.max(0,Math.min(100,s.bb_pct||50));
+    document.getElementById('sig-modal-body').innerHTML = `
+      <div class="grid grid-cols-3 gap-3 mb-4">
+        <div class="bg-gray-900 rounded-lg p-3 text-center">
+          <p class="text-xs text-gray-500">Price</p>
+          <p class="text-lg font-bold">${fmt$(s.price)}</p>
+        </div>
+        <div class="bg-gray-900 rounded-lg p-3 text-center">
+          <p class="text-xs text-gray-500">RSI(14)</p>
+          <p class="text-lg font-bold ${s.rsi<30?'pnl-pos':s.rsi>70?'pnl-neg':'text-white'}">${s.rsi?.toFixed(1)||'—'}</p>
+        </div>
+        <div class="bg-gray-900 rounded-lg p-3 text-center">
+          <p class="text-xs text-gray-500">Bias</p>
+          <p class="mt-1"><span class="badge ${overallClass}">${s.overall}</span></p>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mb-4 text-xs text-gray-400">
+        <div>MA20: <span class="text-white font-mono">${fmt$(s.ma20)}</span></div>
+        <div>MA50: <span class="text-white font-mono">${fmt$(s.ma50)}</span></div>
+        ${s.ma200?`<div>MA200: <span class="text-white font-mono">${fmt$(s.ma200)}</span></div>`:''}
+        <div>BB Upper: <span class="text-white font-mono">${fmt$(s.bb_upper)}</span></div>
+        <div>BB Lower: <span class="text-white font-mono">${fmt$(s.bb_lower)}</span></div>
+        <div>BB%: <span class="text-white font-mono">${s.bb_pct?.toFixed(1)||'—'}%</span></div>
+        <div>MACD Hist: <span class="${s.macd_hist>=0?'pnl-pos':'pnl-neg'} font-mono">${s.macd_hist?.toFixed(4)||'—'}</span></div>
+        <div>Vol Ratio: <span class="text-white font-mono">${s.vol_ratio?.toFixed(2)||'—'}x</span></div>
+      </div>
+      <h4 class="text-sm font-medium text-white mb-2">Signal Breakdown</h4>
+      ${(s.signals||[]).map(sig=>{
+        const sc = sig.bias==='bullish'?'signal-bull':sig.bias==='bearish'?'signal-bear':'signal-neutral';
+        const tc = sig.bias==='bullish'?'text-green-400':sig.bias==='bearish'?'text-red-400':'text-gray-400';
+        return `<div class="signal-row ${sc}"><span class="text-sm text-gray-200">${sig.name}</span><span class="font-mono text-sm ${tc}">${sig.value}</span></div>`;
+      }).join('')}
+      <div class="mt-4 bg-gray-900 rounded-lg p-3">
+        <p class="text-xs text-gray-500 mb-1">Suggested Setup</p>
+        <div class="flex gap-4 text-sm">
+          <div>Entry: <span class="font-mono text-indigo-300">${fmt$(s.suggested_entry)}</span></div>
+          <div>Stop: <span class="font-mono text-red-400">${fmt$(s.suggested_stop)}</span></div>
+          <div>Target: <span class="font-mono text-green-400">${fmt$(s.suggested_target)}</span></div>
+        </div>
+      </div>
+      <div class="flex gap-3 mt-4 justify-end">
+        <button onclick="prefillPlayFromSig(${JSON.stringify(s).replace(/"/g,'&quot;')})" class="btn btn-success text-sm">Create Play</button>
+      </div>`;
+  } catch(e) {
+    document.getElementById('sig-modal-body').innerHTML = `<div class="text-red-400">${e.message}</div>`;
+  }
+}
+
+function prefillPlayFromSig(s) {
+  closeModal('modal-signals');
+  prefillPlay(s.symbol, s.suggested_entry, s.suggested_stop, s.suggested_target);
+}
+
+// ── PLAYS ─────────────────────────────────────────────────────────────
+function setPlaysTab(t) {
+  playsSubTab = t;
+  document.getElementById('plays-active-list').classList.toggle('hidden', t!=='active');
+  document.getElementById('plays-closed-list').classList.toggle('hidden', t!=='closed');
+  document.getElementById('plays-tab-active').className = t==='active'?'tab-active pb-3 text-sm font-medium':'tab-inactive pb-3 text-sm font-medium';
+  document.getElementById('plays-tab-closed').className = t==='closed'?'tab-active pb-3 text-sm font-medium':'tab-inactive pb-3 text-sm font-medium';
+  loadPlays();
+}
+
+async function loadPlays() {
+  try {
+    const plays = await api('/api/plays');
+    renderActivePlays(plays.filter(p=>p.status==='ACTIVE'||p.status==='PENDING'));
+    renderClosedPlays(plays.filter(p=>p.status==='CLOSED'));
+  } catch(e) {
+    document.getElementById('plays-active-list').innerHTML = `<div class="text-red-400">${e.message}</div>`;
+  }
+}
+
+function renderActivePlays(plays) {
+  const el = document.getElementById('plays-active-list');
+  if(!plays.length) {
+    el.innerHTML = '<div class="col-span-3 text-center py-12 text-gray-500 card p-8">No active plays. Click "New Play" to create one.</div>';
+    return;
+  }
+  el.innerHTML = plays.map(p=>{
+    const cpnl = p.current_pnl;
+    const pnlStr = cpnl!=null ? `<span class="font-mono text-sm ${pnlClass(cpnl)}">${cpnl>=0?'+':''}${fmt$(cpnl)}</span>` : '—';
+    const cur = p.current_price ? `<span class="text-xs text-gray-500 ml-2">@ ${fmt$(p.current_price)}</span>` : '';
+    const dirColor = p.direction==='LONG'?'text-green-400':'text-red-400';
+    const statusColor = p.status==='ACTIVE'?'bg-green-900/40 text-green-400 border-green-800':'bg-yellow-900/40 text-yellow-400 border-yellow-800';
+    return `<div class="card p-5 flex flex-col gap-3">
+      <div class="flex items-start justify-between">
+        <div>
+          <span class="text-lg font-bold text-white">${p.symbol}</span>
+          <span class="ml-2 text-sm ${dirColor} font-medium">${p.direction}</span>
+        </div>
+        <span class="text-xs px-2 py-0.5 rounded-full border ${statusColor}">${p.status}</span>
+      </div>
+      <div class="grid grid-cols-3 gap-2 text-xs">
+        <div class="bg-gray-900 rounded p-2 text-center">
+          <p class="text-gray-500">Entry</p>
+          <p class="font-mono text-white mt-0.5">${fmt$(p.entry_price)}</p>
+        </div>
+        <div class="bg-gray-900 rounded p-2 text-center">
+          <p class="text-gray-500">Stop</p>
+          <p class="font-mono text-red-400 mt-0.5">${fmt$(p.stop_loss)}</p>
+        </div>
+        <div class="bg-gray-900 rounded p-2 text-center">
+          <p class="text-gray-500">Target</p>
+          <p class="font-mono text-green-400 mt-0.5">${fmt$(p.take_profit)}</p>
+        </div>
+      </div>
+      <div class="flex items-center justify-between border-t border-gray-700 pt-2">
+        <div class="text-sm">P&L: ${pnlStr}${cur}</div>
+        <span class="text-xs text-gray-500">${p.shares} shares</span>
+      </div>
+      ${p.notes?`<p class="text-xs text-gray-500 italic">${p.notes}</p>`:''}
+      ${p.alpaca_order_id?`<p class="text-xs text-indigo-400">Order: ${p.alpaca_order_id}</p>`:''}
+      <div class="flex gap-2 mt-auto">
+        <button onclick="openClosePlay(${p.id})" class="btn btn-danger text-xs py-1.5 flex-1 justify-center">Close</button>
+        <button onclick="deletePlay(${p.id})" class="btn btn-ghost text-xs py-1.5 px-3 text-red-400">Del</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderClosedPlays(plays) {
+  const tbody = document.getElementById('plays-closed-body');
+  if(!plays.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-500">No closed plays</td></tr>';
+    return;
+  }
+  tbody.innerHTML = plays.map((p,i)=>`
+    <tr class="${i%2===0?'':'even'}">
+      <td class="px-4 py-3 font-medium">${p.symbol}</td>
+      <td class="px-4 py-3 ${p.direction==='LONG'?'text-green-400':'text-red-400'}">${p.direction}</td>
+      <td class="px-4 py-3 text-right font-mono">${fmt$(p.entry_price)}</td>
+      <td class="px-4 py-3 text-right font-mono">${fmt$(p.exit_price)}</td>
+      <td class="px-4 py-3 text-right font-mono ${pnlClass(p.pnl)}">${p.pnl>=0?'+':''}${fmt$(p.pnl)}</td>
+      <td class="px-4 py-3 text-right font-mono ${pnlClass(p.pnl_pct)}">${fmtPct(p.pnl_pct)}</td>
+      <td class="px-4 py-3 text-gray-400 text-xs">${fmtDate(p.exit_date)}</td>
+    </tr>`).join('');
+}
+
+function openNewPlay() {
+  ['np-symbol','np-entry','np-stop','np-tp','np-shares','np-notes'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('np-submit-order').checked = false;
+  document.getElementById('np-rr').textContent = '—';
+  openModal('modal-new-play');
+}
+
+function prefillPlay(sym, price, stop, target) {
+  openNewPlay();
+  document.getElementById('np-symbol').value = sym;
+  if(price) document.getElementById('np-entry').value = price;
+  if(stop)  document.getElementById('np-stop').value  = stop;
+  if(target) document.getElementById('np-tp').value   = target;
+  updateRR();
+  switchTab('plays');
+  setTimeout(()=>openModal('modal-new-play'),100);
+}
+
+function updateRR() {
+  const entry = parseFloat(document.getElementById('np-entry').value)||0;
+  const stop  = parseFloat(document.getElementById('np-stop').value)||0;
+  const tp    = parseFloat(document.getElementById('np-tp').value)||0;
+  const risk   = Math.abs(entry - stop);
+  const reward = Math.abs(tp - entry);
+  const el = document.getElementById('np-rr');
+  if(risk > 0) {
+    const rr = (reward/risk).toFixed(2);
+    el.textContent = rr + ':1';
+    el.className = 'text-lg font-bold ' + (reward/risk >= 2 ? 'text-green-400' : reward/risk >= 1 ? 'text-yellow-400' : 'text-red-400');
+  } else {
+    el.textContent = '—';
+    el.className = 'text-lg font-bold text-indigo-400';
+  }
+}
+
+async function submitPlay() {
+  const sym = document.getElementById('np-symbol').value.trim().toUpperCase();
+  const entry = parseFloat(document.getElementById('np-entry').value);
+  const stop  = parseFloat(document.getElementById('np-stop').value);
+  const tp    = parseFloat(document.getElementById('np-tp').value);
+  const shares= parseFloat(document.getElementById('np-shares').value);
+  const dir   = document.getElementById('np-direction').value;
+  if(!sym || !entry || !stop || !tp || !shares) { alert('Fill in all required fields.'); return; }
+  try {
+    const res = await api('/api/plays', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        symbol:sym, direction:dir, entry_price:entry, stop_loss:stop,
+        take_profit:tp, shares:shares,
+        notes: document.getElementById('np-notes').value||null,
+        submit_order: document.getElementById('np-submit-order').checked,
+      })
+    });
+    closeModal('modal-new-play');
+    if(res.alpaca_order_id) alert(`Order submitted! Alpaca ID: ${res.alpaca_order_id}`);
+    loadPlays();
+  } catch(e) { alert(e.message); }
+}
+
+function openClosePlay(id) {
+  document.getElementById('cp-id').value = id;
+  document.getElementById('cp-price').value = '';
+  openModal('modal-close-play');
+}
+
+async function confirmClosePlay() {
+  const id = document.getElementById('cp-id').value;
+  const price = document.getElementById('cp-price').value;
+  try {
+    const res = await api(`/api/plays/${id}/close`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({exit_price: price ? parseFloat(price) : null})
+    });
+    closeModal('modal-close-play');
+    alert(`Position closed. P&L: ${res.pnl >= 0 ? '+' : ''}$${res.pnl} (${fmtPct(res.pnl_pct)})`);
+    loadPlays();
+  } catch(e) { alert(e.message); }
+}
+
+async function deletePlay(id) {
+  if(!confirm('Delete this play?')) return;
+  await api(`/api/plays/${id}`, {method:'DELETE'});
+  loadPlays();
+}
+
+// ── BACKTEST ──────────────────────────────────────────────────────────
+async function loadBtLatest() {
+  try {
+    const r = await api('/api/backtest/latest');
+    if(r && !r.error) renderBtResult(r);
+  } catch(e) {}
+}
+
+async function loadBtHistory() {
+  try {
+    const rows = await api('/api/backtest/history');
+    const tbody = document.getElementById('bt-history-body');
+    if(!rows.length) return;
+    tbody.innerHTML = rows.map((r,i)=>`
+      <tr class="${i%2===0?'':'even'}">
+        <td class="px-4 py-3 text-xs text-gray-400">${fmtDate(r.created_at)}</td>
+        <td class="px-4 py-3 text-xs">${JSON.parse(r.symbols||'[]').join(', ')}</td>
+        <td class="px-4 py-3 text-xs text-gray-400">${r.start_date} → ${r.end_date}</td>
+        <td class="px-4 py-3 text-right font-mono ${pnlClass(r.total_return)}">${fmtPct(r.total_return)}</td>
+        <td class="px-4 py-3 text-right font-mono">${r.sharpe?.toFixed(2)||'—'}</td>
+        <td class="px-4 py-3 text-right font-mono text-red-400">${fmtPct(r.max_drawdown)}</td>
+        <td class="px-4 py-3 text-right">${r.n_trades||0}</td>
+      </tr>`).join('');
+  } catch(e) {}
+}
+
+async function runBacktest() {
+  const symsRaw = document.getElementById('bt-symbols').value;
+  const symbols = symsRaw.split(/[,\s]+/).map(s=>s.trim().toUpperCase()).filter(Boolean);
+  const start = document.getElementById('bt-start').value;
+  const end   = document.getElementById('bt-end').value;
+  if(!symbols.length || !start || !end) { alert('Fill in symbols and dates.'); return; }
+
+  document.getElementById('bt-run-btn').disabled = true;
+  document.getElementById('bt-run-btn').textContent = 'Running…';
+  document.getElementById('bt-progress-section').classList.remove('hidden');
+  document.getElementById('bt-error').classList.add('hidden');
+
+  try {
+    await api('/api/backtest/run', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({symbols,start_date:start,end_date:end})
+    });
+    pollBtStatus();
+  } catch(e) {
+    showBtError(e.message);
+  }
+}
+
+function pollBtStatus() {
+  clearInterval(btPoller);
+  btPoller = setInterval(async()=>{
+    try {
+      const s = await api('/api/backtest/status');
+      document.getElementById('bt-pct').textContent = (s.progress||0)+'%';
+      document.getElementById('bt-progress-bar').style.width = (s.progress||0)+'%';
+      if(!s.running) {
+        clearInterval(btPoller);
+        document.getElementById('bt-run-btn').disabled = false;
+        document.getElementById('bt-run-btn').textContent = 'Run Backtest';
+        document.getElementById('bt-progress-section').classList.add('hidden');
+        if(s.error) {
+          showBtError(s.error);
+        } else if(s.result) {
+          renderBtResult(s.result);
+          loadBtHistory();
+        }
+      }
+    } catch(e) {}
+  }, 2000);
+}
+
+function showBtError(msg) {
+  document.getElementById('bt-run-btn').disabled = false;
+  document.getElementById('bt-run-btn').textContent = 'Run Backtest';
+  document.getElementById('bt-progress-section').classList.add('hidden');
+  const el = document.getElementById('bt-error');
+  el.classList.remove('hidden');
+  el.textContent = msg;
+}
+
+function renderBtResult(r) {
+  const fmtM = v => v>0?`<span class="pnl-pos">+${v.toFixed(2)}%</span>`:`<span class="pnl-neg">${v.toFixed(2)}%</span>`;
+  document.getElementById('bt-m-ret').innerHTML  = fmtM(r.total_return);
+  document.getElementById('bt-m-cagr').innerHTML = fmtM(r.cagr);
+  document.getElementById('bt-m-sharpe').textContent = r.sharpe?.toFixed(3)||'—';
+  document.getElementById('bt-m-dd').textContent = r.max_drawdown?.toFixed(2)+'%'||'—';
+
+  // Regime badges
+  const reg = document.getElementById('bt-regime');
+  reg.innerHTML = (r.regime_breakdown||[]).map(rb=>
+    `<span class="badge badge-neutral text-xs">${rb.regime}: ${rb.pct}%</span>`
+  ).join('');
+
+  // Charts
+  drawBtCharts(r);
+}
+
+function drawBtCharts(r) {
+  const commonOpts = {
+    responsive: true,
+    maintainAspectRatio: true,
+    plugins: { legend: { display: false }, tooltip: { mode:'index', intersect:false } },
+    scales: {
+      x: { ticks: { color:'#6b7280', maxTicksLimit:8, maxRotation:0 }, grid: { color:'#1e1e2e' } },
+      y: { ticks: { color:'#6b7280' }, grid: { color:'#1e1e2e' } }
+    },
+    elements: { point: { radius:0 }, line: { tension:0.2 } },
+    animation: false,
+  };
+  const labels = r.equity_dates || [];
+
+  // Equity chart
+  if(btEquityChart) btEquityChart.destroy();
+  btEquityChart = new Chart(document.getElementById('bt-equity-chart').getContext('2d'), {
+    type:'line',
+    data: {
+      labels,
+      datasets: [{
+        data: r.equity_values||[],
+        borderColor:'#6366f1',
+        backgroundColor:'rgba(99,102,241,0.08)',
+        fill: true,
+        borderWidth: 1.5,
+      }]
+    },
+    options: { ...commonOpts,
+      scales: { ...commonOpts.scales, y: { ...commonOpts.scales.y, ticks: { color:'#6b7280', callback: v=>'$'+v.toLocaleString() } } }
+    }
+  });
+
+  // Drawdown chart
+  if(btDdChart) btDdChart.destroy();
+  btDdChart = new Chart(document.getElementById('bt-dd-chart').getContext('2d'), {
+    type:'line',
+    data: {
+      labels,
+      datasets: [{
+        data: r.drawdown_values||[],
+        borderColor:'#ef4444',
+        backgroundColor:'rgba(239,68,68,0.1)',
+        fill: true,
+        borderWidth: 1.5,
+      }]
+    },
+    options: { ...commonOpts,
+      scales: { ...commonOpts.scales, y: { ...commonOpts.scales.y, ticks: { color:'#6b7280', callback: v=>v+'%' } } }
+    }
+  });
+}
+
+// ── HISTORY ───────────────────────────────────────────────────────────
+async function loadHistory() {
+  try {
+    const [trades, metrics] = await Promise.all([api('/api/history'), api('/api/history/metrics')]);
+    historyData = trades;
+    renderHistoryMetrics(metrics);
+    renderHistoryChart(metrics.monthly||[]);
+    renderHistoryTable();
+  } catch(e) {}
+}
+
+function renderHistoryMetrics(m) {
+  document.getElementById('h-total-pnl').innerHTML = `<span class="${pnlClass(m.total_pnl)}">${m.total_pnl>=0?'+':''}${fmt$(m.total_pnl)}</span>`;
+  document.getElementById('h-n-trades').textContent = m.n_trades||0;
+  document.getElementById('h-win-rate').textContent = (m.win_rate||0)+'%';
+  document.getElementById('h-pf').textContent = m.profit_factor||'—';
+  document.getElementById('h-avg-win').textContent = fmt$(m.avg_win);
+  document.getElementById('h-avg-loss').textContent = fmt$(m.avg_loss);
+}
+
+function renderHistoryChart(monthly) {
+  if(hMonthlyChart) hMonthlyChart.destroy();
+  if(!monthly.length) return;
+  hMonthlyChart = new Chart(document.getElementById('h-monthly-chart').getContext('2d'), {
+    type:'bar',
+    data: {
+      labels: monthly.map(m=>m.month),
+      datasets: [{
+        data: monthly.map(m=>m.pnl),
+        backgroundColor: monthly.map(m=>m.pnl>=0?'rgba(74,222,128,0.7)':'rgba(248,113,113,0.7)'),
+        borderRadius: 4,
+      }]
+    },
+    options: {
+      responsive:true,
+      maintainAspectRatio:true,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`$${ctx.parsed.y.toFixed(2)}`}}},
+      scales:{
+        x:{ticks:{color:'#6b7280'},grid:{color:'#1e1e2e'}},
+        y:{ticks:{color:'#6b7280',callback:v=>'$'+v},grid:{color:'#1e1e2e'}}
+      },
+      animation:false,
+    }
+  });
+}
+
+function renderHistoryTable() {
+  const filter = document.getElementById('h-filter').value.trim().toUpperCase();
+  let data = filter ? historyData.filter(r=>r.symbol.includes(filter)) : historyData;
+  data = [...data].sort((a,b)=>{
+    let av=a[historySort.col]||'', bv=b[historySort.col]||'';
+    if(typeof av==='number'||!isNaN(av)) { av=parseFloat(av)||0; bv=parseFloat(bv)||0; }
+    return historySort.asc ? (av>bv?1:-1) : (av<bv?1:-1);
+  });
+  const tbody = document.getElementById('history-body');
+  if(!data.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center py-8 text-gray-500">No closed trades yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.map((r,i)=>`
+    <tr class="${i%2===0?'':'even'}">
+      <td class="px-4 py-2.5 font-medium">${r.symbol}</td>
+      <td class="px-4 py-2.5 ${r.direction==='LONG'?'text-green-400':'text-red-400'}">${r.direction}</td>
+      <td class="px-4 py-2.5 text-right font-mono">${fmt$(r.entry_price)}</td>
+      <td class="px-4 py-2.5 text-right font-mono">${fmt$(r.exit_price)}</td>
+      <td class="px-4 py-2.5 text-right font-mono">${r.shares||'—'}</td>
+      <td class="px-4 py-2.5 text-right font-mono ${pnlClass(r.pnl)}">${r.pnl>=0?'+':''}${fmt$(r.pnl)}</td>
+      <td class="px-4 py-2.5 text-right font-mono ${pnlClass(r.pnl_pct)}">${fmtPct(r.pnl_pct)}</td>
+      <td class="px-4 py-2.5 text-xs text-gray-400">${fmtDate(r.exit_date)}</td>
+    </tr>`).join('');
+}
+
+function sortHistory(col) {
+  if(historySort.col===col) historySort.asc = !historySort.asc;
+  else { historySort.col=col; historySort.asc=false; }
+  renderHistoryTable();
+}
+
+function filterHistory() { renderHistoryTable(); }
+
+async function exportHistory() {
+  window.location = API + '/api/history/export';
+}
+
+// ── Init ──────────────────────────────────────────────────────────────
+function refreshAll() {
+  const active = TABS.find(t=>!document.getElementById('page-'+t).classList.contains('hidden'));
+  if(active==='watchlist') loadWatchlist();
+  else if(active==='plays') loadPlays();
+  else if(active==='backtest') { loadBtLatest(); loadBtHistory(); }
+  else if(active==='history') loadHistory();
+  loadPortfolio();
+}
+
+// Boot
+loadPortfolio();
+switchTab('watchlist');
+setInterval(loadPortfolio, 30000);
+</script>
+</body>
+</html>

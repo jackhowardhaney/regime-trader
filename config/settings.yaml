@@ -24,20 +24,21 @@ hmm:
   flicker_window: 20                # bars over which to count rapid regime changes
   flicker_threshold: 4              # max regime changes in flicker_window before suppression
   min_confidence: 0.55              # minimum posterior probability to act on a regime signal
+  random_state: 42                  # base seed — each fold uses random_state + fold_number
 
 strategy:
   low_vol_allocation: 0.95          # equity allocation in low-volatility regime
   mid_vol_allocation_trend: 0.95    # equity allocation in mid-vol regime with trend
   mid_vol_allocation_no_trend: 0.60 # equity allocation in mid-vol regime without trend
   high_vol_allocation: 0.60         # equity allocation in high-volatility regime
-  low_vol_leverage: 1.25            # leverage multiplier allowed in low-vol regime
+  low_vol_leverage: 1.10            # leverage multiplier allowed in low-vol regime
   rebalance_threshold: 0.10         # drift tolerance before triggering a rebalance
   uncertainty_size_mult: 0.50       # position size multiplier when regime confidence is low
 
 risk:
   max_risk_per_trade: 0.01          # max capital risked on a single trade
   max_exposure: 0.80                # max total gross equity exposure
-  max_leverage: 1.25
+  max_leverage: 1.10
   max_single_position: 0.15         # max weight for any single symbol
   max_concurrent: 5                 # max number of open positions at once
   max_daily_trades: 20
@@ -50,9 +51,9 @@ risk:
 backtest:
   slippage_pct: 0.0005
   initial_capital: 100000
-  train_window: 252                 # bars used to train HMM each walk-forward fold
-  test_window: 126                  # bars traded in each walk-forward fold
-  step_size: 126                    # bars to advance before the next fold
+  train_window: 504                 # bars used to train HMM each walk-forward fold (2 years min)
+  test_window: 126                  # bars traded in each walk-forward fold (~6 months)
+  step_size: 63                     # bars to advance before the next fold (~3 months)
   risk_free_rate: 0.045
 
 monitoring:

@@ -45,14 +45,21 @@ def volume_trend(volume: pd.Series, sma_window: int = 10) -> pd.Series:
     return volume.rolling(sma_window).mean().diff()
 
 
+def _true_range(
+    high: pd.Series, low: pd.Series, close: pd.Series
+) -> pd.Series:
+    """Wilder True Range: max(H-L, |H-C_prev|, |L-C_prev|)."""
+    return pd.concat(
+        [high - low, (high - close.shift()).abs(), (low - close.shift()).abs()],
+        axis=1,
+    ).max(axis=1)
+
+
 def adx(
     high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
 ) -> pd.Series:
     """Average Directional Index (Wilder smoothing, period=14)."""
-    tr = pd.concat(
-        [high - low, (high - close.shift()).abs(), (low - close.shift()).abs()],
-        axis=1,
-    ).max(axis=1)
+    tr = _true_range(high, low, close)
     atr = tr.ewm(alpha=1.0 / period, adjust=False).mean()
 
     plus_dm = high.diff()
@@ -103,10 +110,7 @@ def normalized_atr(
     high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14
 ) -> pd.Series:
     """14-period ATR divided by close price."""
-    tr = pd.concat(
-        [high - low, (high - close.shift()).abs(), (low - close.shift()).abs()],
-        axis=1,
-    ).max(axis=1)
+    tr = _true_range(high, low, close)
     atr = tr.ewm(alpha=1.0 / period, adjust=False).mean()
     return atr / (close + 1e-10)
 
@@ -161,40 +165,57 @@ class FeatureEngineer:
         low = ohlcv["low"]
         volume = ohlcv["volume"]
 
+        # Compute log returns once and reuse across all return-derived features.
+        # realized_volatility and vol_ratio each call log_returns(close) internally
+        # too, but isolating those computations here avoids redundant rolling windows.
+        log_ret_1 = np.log(close / close.shift(1))
+
         raw = pd.DataFrame(index=ohlcv.index)
 
-        # Returns: log returns over 1, 5, 20 periods
-        raw["ret_1"] = log_returns(close, 1)
-        raw["ret_5"] = log_returns(close, 5)
-        raw["ret_20"] = log_returns(close, 20)
+        # Returns
+        raw["ret_1"] = log_ret_1
+        raw["ret_5"] = np.log(close / close.shift(5))
+        raw["ret_20"] = np.log(close / close.shift(20))
 
-        # Volatility: realized vol (20-period rolling std), vol ratio (5 / 20)
-        raw["realized_vol_20"] = realized_volatility(close, 20)
-        raw["vol_ratio_5_20"] = vol_ratio(close, 5, 20)
+        # Volatility (build from the pre-computed 1-period returns)
+        raw["realized_vol_20"] = log_ret_1.rolling(20).std() * np.sqrt(252)
+        short_vol = log_ret_1.rolling(5).std()
+        long_vol = log_ret_1.rolling(20).std()
+        raw["vol_ratio_5_20"] = short_vol / (long_vol + 1e-10)
 
-        # Volume: z-score vs 50-period mean, slope of 10-period SMA
+        # Volume
         raw["norm_volume_50"] = normalized_volume(volume, 50)
         raw["volume_trend_10"] = volume_trend(volume, 10)
 
-        # Trend: ADX(14), slope of 50-period SMA
-        raw["adx_14"] = adx(high, low, close, 14)
+        # Trend (ADX and normalized ATR share a single True Range computation)
+        tr = _true_range(high, low, close)
+        period = 14
+        atr = tr.ewm(alpha=1.0 / period, adjust=False).mean()
+
+        plus_dm = high.diff()
+        minus_dm = -(low.diff())
+        plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
+        minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
+        plus_di = 100.0 * plus_dm.ewm(alpha=1.0 / period, adjust=False).mean() / (atr + 1e-10)
+        minus_di = 100.0 * minus_dm.ewm(alpha=1.0 / period, adjust=False).mean() / (atr + 1e-10)
+        dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-10)
+        raw["adx_14"] = dx.ewm(alpha=1.0 / period, adjust=False).mean()
+        raw["norm_atr_14"] = atr / (close + 1e-10)
+
         raw["sma50_slope"] = sma_slope(close, 50)
 
-        # Mean reversion: RSI(14) z-score, distance from 200 SMA as % of price
+        # Mean reversion
         raw["rsi14_zscore"] = rsi_zscore(close, 14, 252)
         raw["dist_sma200"] = distance_from_sma(close, 200)
 
-        # Momentum: ROC 10 and 20 period
+        # Momentum
         raw["roc_10"] = rate_of_change(close, 10)
         raw["roc_20"] = rate_of_change(close, 20)
 
-        # Range: normalized ATR (14-period ATR / close)
-        raw["norm_atr_14"] = normalized_atr(high, low, close, 14)
-
-        # Standardize ALL features with rolling z-scores (252-period lookback)
-        standardized = pd.DataFrame(index=raw.index)
-        for col in raw.columns:
-            standardized[col] = rolling_zscore(raw[col], window=252)
+        # Standardize all features with rolling z-scores (252-period lookback)
+        mean = raw.rolling(252).mean()
+        std = raw.rolling(252).std()
+        standardized = (raw - mean) / (std + 1e-10)
 
         return standardized.dropna()
 

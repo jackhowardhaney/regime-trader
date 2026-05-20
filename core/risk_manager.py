@@ -70,13 +70,14 @@ class CircuitBreaker:
       max_dd_from_peak (default 0.10) → halt ALL, write trading_halted.lock
     """
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, live_mode: bool = True) -> None:
         risk = config.get("risk", {})
         self.daily_dd_reduce: float = risk.get("daily_dd_reduce", 0.02)
         self.daily_dd_halt: float = risk.get("daily_dd_halt", 0.03)
         self.weekly_dd_reduce: float = risk.get("weekly_dd_reduce", 0.05)
         self.weekly_dd_halt: float = risk.get("weekly_dd_halt", 0.07)
         self.max_dd_from_peak: float = risk.get("max_dd_from_peak", 0.10)
+        self.live_mode: bool = live_mode  # False in backtests: no lock file, halt resets per fold
 
         self._daily_pnl: float = 0.0
         self._weekly_pnl: float = 0.0
@@ -113,8 +114,15 @@ class CircuitBreaker:
 
         # Priority order: peak > weekly halt > daily halt > weekly reduce > daily reduce
         if peak_dd >= self.max_dd_from_peak:
+            if self._status != "halt_peak":  # only act on the transition, not every bar
+                if self.live_mode:
+                    self._write_lock_file(peak_dd, equity, regime_name)
+                else:
+                    logger.critical(
+                        "PEAK DD EXCEEDED %.1f%% — trading halted for this fold.",
+                        self.max_dd_from_peak * 100,
+                    )
             self._status = "halt_peak"
-            self._write_lock_file(peak_dd, equity, regime_name)
         elif weekly_dd >= self.weekly_dd_halt:
             self._status = "halt_weekly"
         elif daily_dd >= self.daily_dd_halt:
@@ -177,6 +185,17 @@ class CircuitBreaker:
             self._status = "normal"
         self._weekly_pnl = 0.0
 
+    def reset_fold(self) -> None:
+        """Reset all circuit breaker state at the start of a new backtest fold.
+        Peak equity resets to 0 so each fold measures drawdown from its opening equity,
+        preventing a prior-fold crash from immediately halting all future folds."""
+        if self._status != "normal":
+            logger.info("Circuit breaker fold reset: %s → normal", self._status)
+        self._status = "normal"
+        self._daily_pnl = 0.0
+        self._weekly_pnl = 0.0
+        self._peak_equity = 0.0  # re-established from first bar of this fold
+
     def get_history(self) -> List[dict]:
         return list(self._history)
 
@@ -216,7 +235,7 @@ class RiskManager:
             execute(decision.modified_signal)
     """
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, live_mode: bool = True) -> None:
         self.config = config
         risk = config.get("risk", {})
         hmm_cfg = config.get("hmm", {})
@@ -243,7 +262,7 @@ class RiskManager:
         self.min_confidence: float = hmm_cfg.get("min_confidence", 0.55)
         self.flicker_threshold: int = hmm_cfg.get("flicker_threshold", 4)
 
-        self.circuit_breaker = CircuitBreaker(config)
+        self.circuit_breaker = CircuitBreaker(config, live_mode=live_mode)
 
     # ------------------------------------------------------------------
     # Primary entry point
@@ -554,3 +573,7 @@ class RiskManager:
             rejection_reason=reason,
             modifications=modifications or [],
         )
+
+
+# Alias used by test_risk.py — wraps RiskManager's config dict as a typed object
+RiskParams = dict

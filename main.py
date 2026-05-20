@@ -190,7 +190,7 @@ def run_train_only(args: argparse.Namespace, config: dict, credentials: dict) ->
     fe = FeatureEngineer()
     features_df = fe.build_hmm_features(bars)
     log_rets = np.log(bars["close"] / bars["close"].shift(1)).dropna()
-    features_df, log_rets = features_df.align(log_rets, join="inner")
+    features_df, log_rets = features_df.align(log_rets, join="inner", axis=0)
 
     hmm_cfg = config.get("hmm", {})
     engine = HMMEngine(
@@ -729,7 +729,7 @@ class LiveTrader:
         fe = FeatureEngineer()
         features_df = fe.build_hmm_features(bars)
         log_rets = np.log(bars["close"] / bars["close"].shift(1)).dropna()
-        features_df, log_rets = features_df.align(log_rets, join="inner")
+        features_df, log_rets = features_df.align(log_rets, join="inner", axis=0)
 
         hmm_cfg = self.config.get("hmm", {})
         engine = HMMEngine(

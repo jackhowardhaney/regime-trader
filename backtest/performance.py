@@ -131,8 +131,11 @@ class PerformanceAnalyzer:
         if regime_history.empty:
             return pd.DataFrame()
 
-        reg = regime_history["regime"].reindex(returns.index).ffill().dropna()
-        ret, reg = returns.align(reg, join="inner")
+        # Overlapping folds produce duplicate timestamps — keep the last entry per bar
+        regime_series = regime_history["regime"]
+        regime_series = regime_series[~regime_series.index.duplicated(keep="last")]
+        reg = regime_series.reindex(returns.index).ffill().dropna()
+        ret, reg = returns.align(reg, join="inner", axis=0)
 
         rows = []
         for regime in sorted(reg.unique()):

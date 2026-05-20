@@ -67,10 +67,12 @@ class HMMEngine:
         flicker_window: int = 20,
         flicker_threshold: int = 4,
         min_confidence: float = 0.55,
+        random_state: int = 42,
     ) -> None:
         self.n_candidates = n_candidates or [3, 4, 5, 6, 7]
         self.n_init = n_init
         self.covariance_type = covariance_type
+        self.random_state = random_state
         self.stability_bars = stability_bars
         self.flicker_window = flicker_window
         self.flicker_threshold = flicker_threshold
@@ -82,9 +84,15 @@ class HMMEngine:
         self.regime_info: Dict[int, RegimeInfo] = {}
         # maps HMM internal state index → sorted label rank (0 = most bearish)
         self._state_to_label_idx: np.ndarray = np.array([])
+        # reverse map for O(1) lookup in stability filter
+        self._label_to_idx: Dict[str, int] = {}
         self.bic: float = float("inf")
         self.training_date: Optional[datetime] = None
         self.is_fitted: bool = False
+
+        # Cached emission probability components — computed once after fit()
+        self._inv_covars: Optional[np.ndarray] = None   # (n_regimes, n_features, n_features)
+        self._log_norms: Optional[np.ndarray] = None    # (n_regimes,)
 
         # Stability filter runtime state
         self._confirmed_regime: Optional[str] = None
@@ -140,8 +148,10 @@ class HMMEngine:
         self.is_fitted = True
         self._cached_alpha = None
 
-        self._assign_regime_labels(features, returns)
-        self._build_regime_info(features, returns)
+        # Run Viterbi once, pass state_sequence to both labeling and info-building
+        state_sequence = self._assign_regime_labels(features, returns)
+        self._build_regime_info(features, returns, state_sequence)
+        self._build_emission_cache()
         return self
 
     def _fit_candidate(
@@ -151,13 +161,13 @@ class HMMEngine:
         best_ll = -np.inf
         best_model: Optional[hmm.GaussianHMM] = None
 
-        for _ in range(self.n_init):
+        for init_idx in range(self.n_init):
             candidate = hmm.GaussianHMM(
                 n_components=n,
                 covariance_type=self.covariance_type,
                 n_iter=200,
                 tol=1e-4,
-                random_state=None,
+                random_state=self.random_state * 1000 + init_idx,
             )
             try:
                 candidate.fit(features)
@@ -193,10 +203,13 @@ class HMMEngine:
         covars = n * n_features * (n_features + 1) // 2
         return transition + start + means + covars
 
-    def _assign_regime_labels(self, features: np.ndarray, returns: np.ndarray) -> None:
+    def _assign_regime_labels(
+        self, features: np.ndarray, returns: np.ndarray
+    ) -> np.ndarray:
         """
         Sort HMM states by mean return (ascending) and map to human-readable labels.
         Viterbi is used here ONLY for training-time labeling, never for live inference.
+        Returns the state_sequence for reuse in _build_regime_info.
         """
         state_sequence = self.model.predict(features)
         mean_returns = np.array(
@@ -210,15 +223,23 @@ class HMMEngine:
             self._state_to_label_idx[state] = rank
 
         self.regime_labels = REGIME_LABELS[self.n_regimes]
+        # Build O(1) label → index lookup used by the stability filter
+        self._label_to_idx = {label: idx for idx, label in enumerate(self.regime_labels)}
+
         label_map = {
             self.regime_labels[self._state_to_label_idx[s]]: round(float(mean_returns[s]), 5)
             for s in range(self.n_regimes)
         }
         logger.info("Regime labels assigned (label: mean_return): %s", label_map)
+        return state_sequence
 
-    def _build_regime_info(self, features: np.ndarray, returns: np.ndarray) -> None:
-        """Populate RegimeInfo for each HMM state."""
-        state_sequence = self.model.predict(features)
+    def _build_regime_info(
+        self,
+        features: np.ndarray,
+        returns: np.ndarray,
+        state_sequence: np.ndarray,
+    ) -> None:
+        """Populate RegimeInfo for each HMM state using pre-computed state_sequence."""
         for state_id in range(self.n_regimes):
             mask = state_sequence == state_id
             label_idx = int(self._state_to_label_idx[state_id])
@@ -244,9 +265,60 @@ class HMMEngine:
                 min_confidence_to_act=min_conf,
             )
 
+    def _build_emission_cache(self) -> None:
+        """Pre-compute per-state inv_covar and log-normalization constants.
+
+        Called once after fit(). The cached values make _emission_prob() a
+        pure vectorized numpy operation instead of a Python loop with repeated
+        matrix inversions.
+        """
+        n_features = self.model.means_.shape[1]
+        log_2pi = n_features * np.log(2.0 * np.pi)
+
+        self._inv_covars = np.zeros_like(self.model.covars_)
+        self._log_norms = np.full(self.n_regimes, -np.inf)
+
+        for s in range(self.n_regimes):
+            cov = self.model.covars_[s]
+            sign, logdet = np.linalg.slogdet(cov)
+            if sign > 0:
+                self._inv_covars[s] = np.linalg.inv(cov)
+                self._log_norms[s] = -0.5 * (log_2pi + logdet)
+
     # ------------------------------------------------------------------
     # Inference — forward algorithm ONLY (no look-ahead bias)
     # ------------------------------------------------------------------
+
+    def _emission_prob(self, obs: np.ndarray) -> np.ndarray:
+        """Vectorized Gaussian emission probabilities for all HMM states.
+
+        Uses pre-cached inverse covariances and log-normalization constants so
+        no matrix inversions occur at inference time — O(n_regimes * n_features²)
+        fully in numpy rather than a Python loop.
+        """
+        diff = obs - self.model.means_              # (n_regimes, n_features)
+        tmp = np.einsum("si,sij->sj", diff, self._inv_covars)  # batched matmul
+        exponents = -0.5 * (tmp * diff).sum(axis=1) # (n_regimes,) quadratic form
+        return np.maximum(np.exp(self._log_norms + exponents), 1e-300)
+
+    def _forward_pass(self, features: np.ndarray) -> np.ndarray:
+        """Run the forward algorithm over a feature sequence.
+
+        Returns the (T, n_regimes) normalized alpha matrix. Caches the final
+        alpha vector for subsequent incremental updates.
+        """
+        T = len(features)
+        alphas = np.zeros((T, self.n_regimes))
+        alphas[0] = self.model.startprob_ * self._emission_prob(features[0])
+        alphas[0] /= alphas[0].sum() + 1e-300
+
+        for t in range(1, T):
+            prior = alphas[t - 1] @ self.model.transmat_
+            alphas[t] = prior * self._emission_prob(features[t])
+            alphas[t] /= alphas[t].sum() + 1e-300
+
+        self._cached_alpha = alphas[-1].copy()
+        return alphas
 
     def predict_regime_filtered(self, features_up_to_now: np.ndarray) -> np.ndarray:
         """
@@ -260,25 +332,7 @@ class HMMEngine:
         """
         if not self.is_fitted:
             raise RuntimeError("HMMEngine must be fitted before inference.")
-
-        T = len(features_up_to_now)
-        alphas = np.zeros((T, self.n_regimes))
-
-        # 1. alpha_0 = startprob * emission_prob(obs_0)
-        alphas[0] = self.model.startprob_ * self._emission_prob(features_up_to_now[0])
-        alphas[0] /= alphas[0].sum() + 1e-300
-
-        for t in range(1, T):
-            # 2. alpha_t = (alpha_{t-1} @ transmat) * emission_prob(obs_t)
-            prior = alphas[t - 1] @ self.model.transmat_
-            alphas[t] = prior * self._emission_prob(features_up_to_now[t])
-            # 3. Normalize at each step
-            norm = alphas[t].sum()
-            alphas[t] /= norm + 1e-300
-
-        # 4. Cache final alpha for incremental live updates
-        self._cached_alpha = alphas[-1].copy()
-
+        alphas = self._forward_pass(features_up_to_now)
         raw_states = np.argmax(alphas, axis=1)
         return np.array([int(self._state_to_label_idx[s]) for s in raw_states])
 
@@ -287,7 +341,7 @@ class HMMEngine:
     ) -> Tuple[int, np.ndarray]:
         """
         Update the forward pass with one new observation using cached alpha.
-        O(n_regimes^2) per step — efficient for the live trading loop.
+        O(n_regimes²) per step — efficient for the live trading loop.
 
         Returns (label_idx, state_probabilities).
         """
@@ -314,38 +368,7 @@ class HMMEngine:
         """
         if not self.is_fitted:
             raise RuntimeError("HMMEngine must be fitted before inference.")
-
-        T = len(features_up_to_now)
-        alphas = np.zeros((T, self.n_regimes))
-        alphas[0] = self.model.startprob_ * self._emission_prob(features_up_to_now[0])
-        alphas[0] /= alphas[0].sum() + 1e-300
-
-        for t in range(1, T):
-            prior = alphas[t - 1] @ self.model.transmat_
-            alphas[t] = prior * self._emission_prob(features_up_to_now[t])
-            alphas[t] /= alphas[t].sum() + 1e-300
-
-        return alphas
-
-    def _emission_prob(self, obs: np.ndarray) -> np.ndarray:
-        """Gaussian log-space emission probabilities for each HMM state."""
-        n_features = len(obs)
-        probs = np.zeros(self.n_regimes)
-        for s in range(self.n_regimes):
-            diff = obs - self.model.means_[s]
-            cov = self.model.covars_[s]
-            try:
-                sign, logdet = np.linalg.slogdet(cov)
-                if sign <= 0:
-                    probs[s] = 1e-300
-                    continue
-                inv_cov = np.linalg.inv(cov)
-                exponent = -0.5 * float(diff @ inv_cov @ diff)
-                log_norm = -0.5 * (n_features * np.log(2 * np.pi) + logdet)
-                probs[s] = np.exp(log_norm + exponent)
-            except np.linalg.LinAlgError:
-                probs[s] = 1e-300
-        return probs
+        return self._forward_pass(features_up_to_now)
 
     # ------------------------------------------------------------------
     # Stability filter
@@ -383,7 +406,6 @@ class HMMEngine:
             self._consecutive_confirmed += 1
             is_confirmed = True
         else:
-            # Regime change pending
             if self._consecutive_candidate >= self.stability_bars:
                 old = self._confirmed_regime
                 self._confirmed_regime = self._candidate_regime
@@ -407,7 +429,7 @@ class HMMEngine:
 
         return RegimeState(
             label=self._confirmed_regime,
-            state_id=self.regime_labels.index(self._confirmed_regime),
+            state_id=self._label_to_idx[self._confirmed_regime],  # O(1) dict lookup
             probability=probability,
             state_probabilities=proba.copy(),
             timestamp=datetime.utcnow(),

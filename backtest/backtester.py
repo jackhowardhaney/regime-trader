@@ -52,7 +52,7 @@ class WalkForwardBacktester:
     Each fold:
       a. Train HMM on In-Sample window (252 bars, BIC model selection)
       b. Build StrategyOrchestrator from trained regime_infos (vol-rank sort)
-      c. Walk Out-of-Sample bar by bar — forward algorithm only, no look-ahead
+      c. Walk Out-of-Sample bar by bar — incremental forward algorithm, no look-ahead
       d. Rebalance when target allocation drifts >10% from current
       e. Record equity, regime, and trade log
     """
@@ -69,7 +69,7 @@ class WalkForwardBacktester:
             config.get("strategy", {}).get("rebalance_threshold", 0.10)
         )
         self._feature_engineer = FeatureEngineer()
-        self._risk_manager = RiskManager(config)
+        self._risk_manager = RiskManager(config, live_mode=False)
 
     def run(
         self,
@@ -93,13 +93,23 @@ class WalkForwardBacktester:
         log_rets = np.log(
             primary_bars["close"] / primary_bars["close"].shift(1)
         ).dropna()
-        features_df, log_rets = features_df.align(log_rets, join="inner")
+        features_df, log_rets = features_df.align(log_rets, join="inner", axis=0)
 
         n = len(features_df)
         if n < self.train_window + self.test_window:
             raise ValueError(
                 f"Need at least {self.train_window + self.test_window} bars, have {n}."
             )
+
+        # Pre-normalize all price DataFrames once — avoids rename() inside the inner loop
+        norm_price_data: Dict[str, pd.DataFrame] = {
+            sym: price_data[sym].rename(columns=str.lower) for sym in symbols
+        }
+        # Pre-extract the fill column for each symbol (open if available, else close)
+        fill_col: Dict[str, str] = {
+            sym: ("open" if "open" in norm_price_data[sym].columns else "close")
+            for sym in symbols
+        }
 
         equity_records: List[tuple] = []
         trade_records: List[TradeRecord] = []
@@ -109,7 +119,6 @@ class WalkForwardBacktester:
         shares: Dict[str, int] = {sym: 0 for sym in symbols}
         current_alloc: Dict[str, float] = {sym: 0.0 for sym in symbols}
 
-        # Daily / weekly P&L tracking for circuit breakers
         day_open_equity: float = self.initial_capital
         week_open_equity: float = self.initial_capital
         prev_day: Optional[tuple] = None
@@ -140,6 +149,7 @@ class WalkForwardBacktester:
                 flicker_window=hmm_cfg.get("flicker_window", 20),
                 flicker_threshold=hmm_cfg.get("flicker_threshold", 4),
                 min_confidence=hmm_cfg.get("min_confidence", 0.55),
+                random_state=hmm_cfg.get("random_state", 42) + fold,
             )
             try:
                 engine.fit(is_features, is_returns)
@@ -151,19 +161,23 @@ class WalkForwardBacktester:
             # --- b. Build orchestrator from trained regime_infos ---
             orchestrator = StrategyOrchestrator(self.config, engine.regime_info)
 
-            # --- c. Walk OOS bar by bar ---
-            for bar_idx in range(oos_idx, oos_end):
-                # Use ALL data up to current bar — strict no look-ahead
-                hist_features = features_df.iloc[: bar_idx + 1].values
-                label_sequence = engine.predict_regime_filtered(hist_features)
-                proba_matrix = engine.predict_regime_proba(hist_features)
-                label_idx = int(label_sequence[-1])
-                proba = proba_matrix[-1]
+            # Reset daily/weekly/peak-halt CB state at each fold boundary.
+            # Peak equity is preserved so cumulative drawdown tracking remains accurate.
+            self._risk_manager.circuit_breaker.reset_fold()
 
+            # Warm up the incremental forward-pass cache with the IS data so the
+            # first OOS bar continues from the correct hidden state distribution.
+            engine.predict_regime_filtered(is_features)
+
+            # --- c. Walk OOS bar by bar — O(N) incremental forward pass ---
+            for bar_idx in range(oos_idx, oos_end):
+                obs = features_df.iloc[bar_idx].values
+                label_idx, proba = engine.predict_regime_filtered_incremental(obs)
                 regime_state = engine.update_stability_filter(label_idx, proba)
 
+                # Build history slices using pre-normalized DataFrames
                 hist_bars = {
-                    sym: price_data[sym].rename(columns=str.lower).iloc[: bar_idx + 1]
+                    sym: norm_price_data[sym].iloc[: bar_idx + 1]
                     for sym in symbols
                 }
 
@@ -172,7 +186,7 @@ class WalkForwardBacktester:
                 )
 
                 current_prices = {
-                    sym: float(price_data[sym].rename(columns=str.lower)["close"].iloc[bar_idx])
+                    sym: float(norm_price_data[sym]["close"].iloc[bar_idx])
                     for sym in symbols
                 }
 
@@ -196,6 +210,9 @@ class WalkForwardBacktester:
 
                 cb_halted = self._risk_manager.circuit_breaker.is_halted()
 
+                # Compute equity once for sizing; reused for mark-to-market below
+                equity = cash + sum(shares[s] * current_prices[s] for s in symbols)
+
                 # --- Fill delay: execute at bar N+1 open ---
                 fill_bar = bar_idx + 1
                 if fill_bar < n and not cb_halted:
@@ -207,15 +224,11 @@ class WalkForwardBacktester:
                         if abs(target_alloc - old_alloc) <= self.rebalance_threshold:
                             continue
 
-                        sym_df = price_data[sym].rename(columns=str.lower)
-                        fill_col = "open" if "open" in sym_df.columns else "close"
-                        fill_price = float(sym_df[fill_col].iloc[fill_bar])
-                        slipped = fill_price * (1.0 + self.slippage_pct)
-
-                        # ALLOCATION MATH (exactly as specified)
-                        equity = cash + sum(
-                            shares[s] * current_prices[s] for s in symbols
+                        fill_price_raw = float(
+                            norm_price_data[sym][fill_col[sym]].iloc[fill_bar]
                         )
+                        slipped = fill_price_raw * (1.0 + self.slippage_pct)
+
                         target_shares = int(equity * target_alloc / slipped)
                         delta = target_shares - shares[sym]
                         cash -= delta * slipped
@@ -230,14 +243,13 @@ class WalkForwardBacktester:
                             new_allocation=target_alloc,
                             shares_delta=delta,
                             fill_price=slipped,
-                            slippage_cost=abs(delta) * fill_price * self.slippage_pct,
+                            slippage_cost=abs(delta) * fill_price_raw * self.slippage_pct,
                             regime_name=regime_state.label,
                             regime_probability=regime_state.probability,
                             strategy_name=signal.strategy_name,
                         ))
 
                 # --- d. Mark to market ---
-                equity = cash + sum(shares[sym] * current_prices[sym] for sym in symbols)
                 equity_records.append((features_df.index[bar_idx], equity))
 
                 # --- e. Update circuit breakers (independent of HMM) ---
