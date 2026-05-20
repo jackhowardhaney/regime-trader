@@ -16,6 +16,7 @@ import pandas as pd
 
 from core.hmm_engine import HMMEngine
 from core.regime_strategies import StrategyOrchestrator
+from core.risk_manager import RiskManager
 from data.feature_engineering import FeatureEngineer
 
 logger = logging.getLogger("regime_trader")
@@ -68,6 +69,7 @@ class WalkForwardBacktester:
             config.get("strategy", {}).get("rebalance_threshold", 0.10)
         )
         self._feature_engineer = FeatureEngineer()
+        self._risk_manager = RiskManager(config)
 
     def run(
         self,
@@ -106,6 +108,12 @@ class WalkForwardBacktester:
         cash = self.initial_capital
         shares: Dict[str, int] = {sym: 0 for sym in symbols}
         current_alloc: Dict[str, float] = {sym: 0.0 for sym in symbols}
+
+        # Daily / weekly P&L tracking for circuit breakers
+        day_open_equity: float = self.initial_capital
+        week_open_equity: float = self.initial_capital
+        prev_day: Optional[tuple] = None
+        prev_week: Optional[tuple] = None
 
         oos_idx = self.train_window
         fold = 0
@@ -168,9 +176,29 @@ class WalkForwardBacktester:
                     for sym in symbols
                 }
 
+                # --- Day / week boundary resets for circuit breakers ---
+                bar_ts = features_df.index[bar_idx]
+                bar_day = (bar_ts.year, bar_ts.month, bar_ts.day)
+                bar_week = (bar_ts.year, bar_ts.isocalendar()[1])
+
+                if prev_day is not None and bar_day != prev_day:
+                    day_open_equity = cash + sum(
+                        shares[s] * current_prices[s] for s in symbols
+                    )
+                    self._risk_manager.circuit_breaker.reset_daily()
+                if prev_week is not None and bar_week != prev_week:
+                    week_open_equity = cash + sum(
+                        shares[s] * current_prices[s] for s in symbols
+                    )
+                    self._risk_manager.circuit_breaker.reset_weekly()
+                prev_day = bar_day
+                prev_week = bar_week
+
+                cb_halted = self._risk_manager.circuit_breaker.is_halted()
+
                 # --- Fill delay: execute at bar N+1 open ---
                 fill_bar = bar_idx + 1
-                if fill_bar < n:
+                if fill_bar < n and not cb_halted:
                     for signal in signals:
                         sym = signal.symbol
                         target_alloc = signal.position_size_pct * signal.leverage
@@ -211,6 +239,13 @@ class WalkForwardBacktester:
                 # --- d. Mark to market ---
                 equity = cash + sum(shares[sym] * current_prices[sym] for sym in symbols)
                 equity_records.append((features_df.index[bar_idx], equity))
+
+                # --- e. Update circuit breakers (independent of HMM) ---
+                daily_pnl = equity - day_open_equity
+                weekly_pnl = equity - week_open_equity
+                self._risk_manager.update_circuit_breakers(
+                    equity, daily_pnl, weekly_pnl, regime_state.label
+                )
 
                 # --- Record regime ---
                 regime_records.append({
