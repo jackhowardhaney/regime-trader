@@ -1,0 +1,60 @@
+# All configurable parameters — grouped by section
+
+broker:
+  paper_trading: true
+  symbols:
+    - SPY
+    - QQQ
+    - AAPL
+    - MSFT
+    - AMZN
+    - GOOGL
+    - NVDA
+    - META
+    - TSLA
+    - AMD
+  timeframe: 1Day
+
+hmm:
+  n_candidates: [3, 4, 5, 6, 7]   # number of regimes to evaluate during model selection
+  n_init: 10                        # random restarts per candidate to avoid local optima
+  covariance_type: full
+  min_train_bars: 252               # minimum bars required before fitting
+  stability_bars: 3                 # consecutive bars a regime must persist before accepted
+  flicker_window: 20                # bars over which to count rapid regime changes
+  flicker_threshold: 4              # max regime changes in flicker_window before suppression
+  min_confidence: 0.55              # minimum posterior probability to act on a regime signal
+
+strategy:
+  low_vol_allocation: 0.95          # equity allocation in low-volatility regime
+  mid_vol_allocation_trend: 0.95    # equity allocation in mid-vol regime with trend
+  mid_vol_allocation_no_trend: 0.60 # equity allocation in mid-vol regime without trend
+  high_vol_allocation: 0.60         # equity allocation in high-volatility regime
+  low_vol_leverage: 1.25            # leverage multiplier allowed in low-vol regime
+  rebalance_threshold: 0.10         # drift tolerance before triggering a rebalance
+  uncertainty_size_mult: 0.50       # position size multiplier when regime confidence is low
+
+risk:
+  max_risk_per_trade: 0.01          # max capital risked on a single trade
+  max_exposure: 0.80                # max total gross equity exposure
+  max_leverage: 1.25
+  max_single_position: 0.15         # max weight for any single symbol
+  max_concurrent: 5                 # max number of open positions at once
+  max_daily_trades: 20
+  daily_dd_reduce: 0.02             # reduce position sizes when daily drawdown hits this
+  daily_dd_halt: 0.03               # halt new trades when daily drawdown hits this
+  weekly_dd_reduce: 0.05            # reduce position sizes when weekly drawdown hits this
+  weekly_dd_halt: 0.07              # halt new trades when weekly drawdown hits this
+  max_dd_from_peak: 0.10            # liquidate to cash when drawdown from peak hits this
+
+backtest:
+  slippage_pct: 0.0005
+  initial_capital: 100000
+  train_window: 252                 # bars used to train HMM each walk-forward fold
+  test_window: 126                  # bars traded in each walk-forward fold
+  step_size: 126                    # bars to advance before the next fold
+  risk_free_rate: 0.045
+
+monitoring:
+  dashboard_refresh_seconds: 5
+  alert_rate_limit_minutes: 15      # minimum minutes between duplicate alerts
