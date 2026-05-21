@@ -22,4 +22,4 @@ RUN mkdir -p /data/results
 
 EXPOSE 8080
 
-CMD ["/bin/sh", "-c", "uvicorn webapp.app:app --host 0.0.0.0 --port ${PORT:-8080}"]
+CMD ["python3", "-c", "import os,uvicorn; uvicorn.run('webapp.app:app', host='0.0.0.0', port=int(os.environ.get('PORT',8080)))"]
