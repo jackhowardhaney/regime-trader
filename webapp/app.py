@@ -340,6 +340,7 @@ def get_signals(symbol: str) -> Dict:
         buy_pct = int(((score + 5) / 10) * 100)
         buy_pct = max(0, min(100, buy_pct))
         overall = "BULLISH" if buy_pct >= 60 else "BEARISH" if buy_pct <= 40 else "NEUTRAL"
+        bsh = "BUY" if buy_pct >= 60 else "SELL" if buy_pct <= 40 else "HOLD"
 
         result = {
             "symbol": symbol,
@@ -356,6 +357,7 @@ def get_signals(symbol: str) -> Dict:
             "score": score,
             "buy_pct": buy_pct,
             "overall": overall,
+            "bsh": bsh,
             "signals": signals,
             "suggested_entry": round(price, 2),
             "suggested_stop": round(price * 0.97, 2),
@@ -516,8 +518,11 @@ def watchlist_quotes():
             continue
         sig_key = f"sig:{sym}"
         sig = _cache.get(sig_key, ({"overall": "NEUTRAL", "rsi": 50, "buy_pct": 50}, 0))[0]
-        results.append({**q, "overall": sig.get("overall", "NEUTRAL"),
-                        "rsi": sig.get("rsi", 50), "buy_pct": sig.get("buy_pct", 50)})
+        results.append({**q,
+                        "overall": sig.get("overall", "NEUTRAL"),
+                        "bsh": sig.get("bsh", "HOLD"),
+                        "rsi": sig.get("rsi", 50),
+                        "buy_pct": sig.get("buy_pct", 50)})
     return results
 
 

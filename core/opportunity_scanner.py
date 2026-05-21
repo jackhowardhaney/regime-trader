@@ -186,12 +186,14 @@ def score_symbol(df: pd.DataFrame, symbol: str) -> Optional[Dict]:
     composite = trend + momentum + rsi_score + vol_score + pat_score
 
     grade = "A" if composite >= 80 else "B" if composite >= 65 else "C" if composite >= 50 else "D" if composite >= 35 else "F"
+    bsh = "BUY" if composite >= 60 else "SELL" if composite < 40 else "HOLD"
 
     return {
         "symbol": symbol,
         "price": round(price, 2),
         "score": composite,
         "grade": grade,
+        "bsh": bsh,
         "breakdown": {
             "trend": trend,
             "momentum": momentum,

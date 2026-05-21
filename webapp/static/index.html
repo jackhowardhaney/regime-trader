@@ -115,8 +115,7 @@
           <th class="text-right px-4 py-3">Price</th>
           <th class="text-right px-4 py-3">Change</th>
           <th class="text-right px-4 py-3">RSI</th>
-          <th class="text-right px-4 py-3">Signal Score</th>
-          <th class="text-center px-4 py-3">Bias</th>
+          <th class="px-4 py-3">BSH Score</th>
           <th class="text-center px-4 py-3">Actions</th>
         </tr>
       </thead>
@@ -188,7 +187,7 @@
           <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
             <th class="text-left px-4 py-3">Symbol</th>
             <th class="text-right px-4 py-3">Price</th>
-            <th class="px-4 py-3">Score</th>
+            <th class="px-4 py-3">BSH Score</th>
             <th class="px-4 py-3">Firing Signals</th>
             <th class="text-right px-4 py-3">RSI</th>
             <th class="text-right px-4 py-3">Vol</th>
@@ -873,8 +872,11 @@ function _renderOpportunities(rows) {
   }
   const compColors = {trend:'#818cf8',momentum:'#60a5fa',rsi:'#4ade80',volume:'#fb923c',pattern:'#f59e0b'};
   const compMax = {trend:25,momentum:25,rsi:20,volume:15,pattern:15};
-  tbody.innerHTML = rows.slice(0,40).map((r,i)=>{
-    const gc = r.score>=80?'#4ade80':r.score>=65?'#86efac':r.score>=50?'#fbbf24':r.score>=35?'#fb923c':'#f87171';
+  tbody.innerHTML = rows.slice(0,60).map((r,i)=>{
+    const bsh = r.bsh || (r.score>=60?'BUY':r.score<40?'SELL':'HOLD');
+    const bshColor = bsh==='BUY'?'#4ade80':bsh==='SELL'?'#f87171':'#fbbf24';
+    const bshBg   = bsh==='BUY'?'#14532d40':bsh==='SELL'?'#7f1d1d40':'#42200640';
+    const bshBdr  = bsh==='BUY'?'#166534':bsh==='SELL'?'#991b1b':'#92400e';
     const sigBadges = (r.firing_signals||[]).map(sig=>{
       const m = meta[sig]||{label:sig,hex:'#6366f1'};
       return `<span style="display:inline-flex;align-items:center;padding:1px 6px;border-radius:99px;font-size:11px;font-weight:600;background:${m.hex}20;color:${m.hex};border:1px solid ${m.hex}40;margin-right:2px">${m.label}</span>`;
@@ -891,9 +893,10 @@ function _renderOpportunities(rows) {
       <td class="px-4 py-2.5 text-right text-gray-200">$${r.price}</td>
       <td class="px-4 py-2.5">
         <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-size:18px;font-weight:700;color:${gc}">${r.score}</span>
-          <span style="font-size:12px;font-weight:700;color:${gc};background:${gc}15;padding:1px 5px;border-radius:4px">${r.grade}</span>
-          <div style="display:flex;align-items:flex-end;gap:1px;margin-top:1px">${bars}</div>
+          <span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700;background:${bshBg};color:${bshColor};border:1px solid ${bshBdr}">${bsh}</span>
+          <span style="font-size:15px;font-weight:700;color:${bshColor}">${r.score}</span>
+          <span style="font-size:11px;color:#6b7280">/100</span>
+          <div style="display:flex;align-items:flex-end;gap:1px">${bars}</div>
         </div>
       </td>
       <td class="px-4 py-2.5">${sigBadges||'<span style="font-size:11px;color:#4b5563">—</span>'}</td>
@@ -991,25 +994,29 @@ async function loadWatchlist() {
       return;
     }
     tbody.innerHTML = quotes.map((q,i)=>{
-      const bias = q.overall||'NEUTRAL';
-      const bClass = biasClass(bias);
+      const bsh = q.bsh || (q.buy_pct>=60?'BUY':q.buy_pct<=40?'SELL':'HOLD');
+      const score = Math.max(0,Math.min(100,q.buy_pct||50));
+      const bshColor = bsh==='BUY'?'#4ade80':bsh==='SELL'?'#f87171':'#fbbf24';
+      const bshBg   = bsh==='BUY'?'#14532d40':bsh==='SELL'?'#7f1d1d40':'#422006';
+      const bshBdr  = bsh==='BUY'?'#166534':bsh==='SELL'?'#991b1b':'#92400e';
+      const barFill = bsh==='BUY'?'#4ade80':bsh==='SELL'?'#f87171':'#fbbf24';
       const chgClass = q.change_pct>=0?'pnl-pos':'pnl-neg';
       const chgPrefix = q.change_pct>=0?'+':'';
       const rsiColor = q.rsi<30?'text-green-400':q.rsi>70?'text-red-400':'text-gray-300';
-      const bar = Math.max(0,Math.min(100,q.buy_pct||50));
-      const barColor = bar>=60?'bg-green-500':bar<=40?'bg-red-500':'bg-yellow-500';
       return `<tr class="${i%2===0?'':'even'} cursor-pointer" onclick="analyzeSymbol('${q.symbol}')">
         <td class="px-4 py-3 font-semibold text-white">${q.symbol}</td>
         <td class="px-4 py-3 text-right font-mono">${fmt$(q.price)}</td>
         <td class="px-4 py-3 text-right font-mono ${chgClass}">${chgPrefix}${fmtPct(q.change_pct)}</td>
         <td class="px-4 py-3 text-right font-mono ${rsiColor}">${q.rsi?Number(q.rsi).toFixed(1):'—'}</td>
         <td class="px-4 py-3">
-          <div class="flex items-center gap-2">
-            <div class="flex-1 progress-bar"><div class="${barColor} h-full rounded-full transition-all" style="width:${bar}%"></div></div>
-            <span class="text-xs text-gray-400 w-8 text-right">${bar}%</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700;background:${bshBg};color:${bshColor};border:1px solid ${bshBdr};min-width:42px;justify-content:center">${bsh}</span>
+            <div style="flex:1;height:6px;border-radius:99px;background:#252535;overflow:hidden;min-width:60px">
+              <div style="height:100%;width:${score}%;background:${barFill};border-radius:99px;transition:width 0.4s"></div>
+            </div>
+            <span style="font-size:12px;color:#9ca3af;width:32px;text-align:right">${score}/100</span>
           </div>
         </td>
-        <td class="px-4 py-3 text-center"><span class="badge ${bClass}">${bias}</span></td>
         <td class="px-4 py-3 text-center" onclick="event.stopPropagation()">
           <div class="flex gap-2 justify-center">
             <button onclick="analyzeSymbol('${q.symbol}')" class="btn btn-ghost text-xs py-1 px-2">Analyze</button>
@@ -1055,9 +1062,11 @@ async function analyzeSymbol(sym) {
   try {
     const s = await api('/api/signals/'+sym);
     if(s.error) throw new Error(s.error);
-    const overallClass = biasClass(s.overall);
-    const rsiBar = Math.max(0,Math.min(100,s.rsi));
-    const bbBar = Math.max(0,Math.min(100,s.bb_pct||50));
+    const bsh = s.bsh || (s.buy_pct>=60?'BUY':s.buy_pct<=40?'SELL':'HOLD');
+    const bshColor = bsh==='BUY'?'#4ade80':bsh==='SELL'?'#f87171':'#fbbf24';
+    const bshBg   = bsh==='BUY'?'#14532d':bsh==='SELL'?'#7f1d1d':'#422006';
+    const score = s.buy_pct||50;
+    const barFill = bsh==='BUY'?'#4ade80':bsh==='SELL'?'#f87171':'#fbbf24';
     document.getElementById('sig-modal-body').innerHTML = `
       <div class="grid grid-cols-3 gap-3 mb-4">
         <div class="bg-gray-900 rounded-lg p-3 text-center">
@@ -1069,8 +1078,14 @@ async function analyzeSymbol(sym) {
           <p class="text-lg font-bold ${s.rsi<30?'pnl-pos':s.rsi>70?'pnl-neg':'text-white'}">${s.rsi?.toFixed(1)||'—'}</p>
         </div>
         <div class="bg-gray-900 rounded-lg p-3 text-center">
-          <p class="text-xs text-gray-500">Bias</p>
-          <p class="mt-1"><span class="badge ${overallClass}">${s.overall}</span></p>
+          <p class="text-xs text-gray-500 mb-1">BSH Score</p>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+            <span style="font-size:18px;font-weight:800;color:${bshColor}">${bsh}</span>
+            <div style="width:100%;height:6px;border-radius:99px;background:#252535;overflow:hidden">
+              <div style="height:100%;width:${score}%;background:${barFill};border-radius:99px"></div>
+            </div>
+            <span style="font-size:11px;color:#9ca3af">${score}/100</span>
+          </div>
         </div>
       </div>
       <div class="grid grid-cols-2 gap-3 mb-4 text-xs text-gray-400">
