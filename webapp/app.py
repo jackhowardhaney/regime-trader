@@ -394,6 +394,10 @@ def get_alpaca_client():
 # ── Backtest state ─────────────────────────────────────────────────
 _bt: Dict[str, Any] = {"running": False, "progress": 0, "result": None, "error": None}
 
+# ── Scanner state ───────────────────────────────────────────────────
+_scan: Dict[str, Any] = {"running": False, "progress": 0, "result": None, "error": None}
+_sim: Dict[str, Any] = {"running": False, "progress": 0, "result": None, "error": None}
+
 
 def _run_backtest(symbols: List[str], start: str, end: str):
     global _bt
@@ -792,6 +796,99 @@ def get_portfolio():
 @app.get("/api/health")
 def health():
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
+
+
+# ── Scanner routes ─────────────────────────────────────────────────
+@app.get("/api/scanner/sectors")
+def scanner_sectors():
+    from data.sector_symbols import SECTOR_SYMBOLS
+    return [
+        {"key": k, "name": v["name"], "color": v["color"], "count": len(v["symbols"])}
+        for k, v in SECTOR_SYMBOLS.items()
+    ]
+
+
+@app.post("/api/scanner/start")
+def scanner_start():
+    global _scan
+    if _scan["running"]:
+        raise HTTPException(409, "Scan already running")
+    from data.sector_symbols import ALL_HANDPICK_SYMBOLS
+    threading.Thread(target=_run_scan, args=(ALL_HANDPICK_SYMBOLS,), daemon=True).start()
+    return {"started": True}
+
+
+@app.get("/api/scanner/status")
+def scanner_status():
+    return _scan
+
+
+@app.post("/api/scanner/sim/start")
+def scanner_sim_start():
+    global _sim
+    if _sim["running"]:
+        raise HTTPException(409, "Simulation already running")
+    if not _scan.get("result"):
+        raise HTTPException(400, "Run a scan first")
+    syms = [r["symbol"] for r in _scan["result"]["results"]]
+    threading.Thread(target=_run_sim, args=(syms,), daemon=True).start()
+    return {"started": True}
+
+
+@app.get("/api/scanner/sim_status")
+def scanner_sim_status():
+    return _sim
+
+
+@app.post("/api/scanner/push")
+def scanner_push(body: dict):
+    symbols = body.get("symbols", [])
+    added = []
+    for sym in symbols:
+        sym = sym.upper().strip()
+        try:
+            with get_db() as conn:
+                conn.execute("INSERT INTO watchlist (symbol) VALUES (?)", (sym,))
+            added.append(sym)
+        except Exception:
+            pass
+    return {"added": added}
+
+
+def _run_scan(symbols: List[str]) -> None:
+    global _scan
+    _scan = {"running": True, "progress": 5, "result": None, "error": None}
+    try:
+        from core.opportunity_scanner import run_scan, SIGNAL_META, SCORE_COMPONENTS
+        _scan["progress"] = 10
+
+        results = run_scan(_load_bars, symbols, max_workers=8)
+        _scan["progress"] = 95
+
+        _scan.update({
+            "running": False,
+            "progress": 100,
+            "result": {
+                "results": results,
+                "total_scanned": len(results),
+                "signal_meta": SIGNAL_META,
+                "score_components": SCORE_COMPONENTS,
+            },
+        })
+    except Exception as e:
+        _scan.update({"running": False, "error": str(e)})
+
+
+def _run_sim(symbols: List[str]) -> None:
+    global _sim
+    _sim = {"running": True, "progress": 5, "result": None, "error": None}
+    try:
+        from core.opportunity_scanner import run_90day_sim
+        _sim["progress"] = 10
+        result = run_90day_sim(_load_bars, symbols, max_workers=6)
+        _sim.update({"running": False, "progress": 100, "result": result})
+    except Exception as e:
+        _sim.update({"running": False, "error": str(e)})
 
 
 # ── Serve frontend ─────────────────────────────────────────────────

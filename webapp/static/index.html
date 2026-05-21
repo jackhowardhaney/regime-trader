@@ -76,6 +76,7 @@
     <!-- Tabs -->
     <nav class="flex gap-1 flex-1">
       <button onclick="switchTab('watchlist')" id="tab-watchlist" class="tab-active px-4 py-4 text-sm font-medium transition-all">Watchlist</button>
+      <button onclick="switchTab('scanner')" id="tab-scanner" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">&#x1F4E1; Hand Picks</button>
       <button onclick="switchTab('plays')" id="tab-plays" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">Plays</button>
       <button onclick="switchTab('backtest')" id="tab-backtest" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">Backtesting</button>
       <button onclick="switchTab('history')" id="tab-history" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">History</button>
@@ -128,7 +129,145 @@
 </div>
 
 <!-- ══════════════════════════════════════════════════
-     TAB 2: PLAYS
+     TAB 2: SCANNER (Hand Picks)
+     ══════════════════════════════════════════════════ -->
+<div id="page-scanner" class="hidden">
+  <!-- Header -->
+  <div class="flex items-center justify-between mb-4">
+    <div>
+      <h1 class="text-xl font-semibold text-white">Hand Picks Scanner</h1>
+      <p class="text-sm text-gray-500 mt-0.5">100+ sector symbols — composite score across momentum, trend, RSI, volume &amp; patterns. Push top picks directly to the bot.</p>
+    </div>
+    <div class="flex gap-2">
+      <button onclick="startScan()" id="scan-btn" class="btn btn-primary">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+        Run Scan
+      </button>
+      <button onclick="startSim()" id="sim-btn" class="btn btn-ghost">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+        90-Day Sim
+      </button>
+    </div>
+  </div>
+
+  <!-- Sector filter chips -->
+  <div id="sector-chips" class="flex flex-wrap gap-2 mb-5">
+    <button style="border-radius:99px;padding:4px 14px;font-size:13px;font-weight:500;background:#4f46e5;color:#fff;border:none;cursor:pointer">All Sectors</button>
+  </div>
+
+  <!-- Scan loading state -->
+  <div id="scanner-loading" class="hidden mb-6">
+    <div class="card p-8 text-center">
+      <div class="text-indigo-400 text-lg font-semibold mb-2">Scanning symbols…</div>
+      <div class="text-gray-500 text-sm mb-4">Fetching price data &amp; computing scores for 100+ symbols</div>
+      <div class="progress-bar w-64 mx-auto"><div class="progress-fill" id="scan-progress-bar" style="width:5%"></div></div>
+    </div>
+  </div>
+
+  <!-- Firing Now -->
+  <div id="firing-signals-section" class="hidden mb-6">
+    <h2 class="text-base font-semibold text-white mb-3">Firing Now</h2>
+    <div id="firing-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3"></div>
+  </div>
+
+  <!-- Top Opportunities -->
+  <div id="scanner-results" class="hidden mb-6">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="text-base font-semibold text-white">Top Opportunities</h2>
+        <p class="text-xs text-gray-500" id="scan-meta">Sorted by composite score (0–100)</p>
+      </div>
+      <button onclick="pushTopPicks()" class="btn btn-success text-sm">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Push Top 5 to Watchlist
+      </button>
+    </div>
+    <div class="card overflow-hidden">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
+            <th class="text-left px-4 py-3">Symbol</th>
+            <th class="text-right px-4 py-3">Price</th>
+            <th class="px-4 py-3">Score</th>
+            <th class="px-4 py-3">Firing Signals</th>
+            <th class="text-right px-4 py-3">RSI</th>
+            <th class="text-right px-4 py-3">Vol</th>
+            <th class="text-center px-4 py-3">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="scanner-tbody">
+          <tr><td colspan="7" class="text-center py-8 text-gray-500">Run a scan to see opportunities</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Score Methodology -->
+  <div class="card p-5 mb-6">
+    <h3 class="text-sm font-semibold text-white mb-3">Score Methodology (0–100)</h3>
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+      <div class="bg-gray-900 rounded-lg p-3 border border-indigo-900">
+        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-indigo-400"></div><span class="text-sm font-semibold text-indigo-300">Trend</span><span class="text-xs text-gray-500 ml-auto">25 pts</span></div>
+        <p class="text-xs text-gray-400">Price vs EMA21 (+8), EMA50 (+9), SMA200 (+8)</p>
+      </div>
+      <div class="bg-gray-900 rounded-lg p-3 border border-blue-900">
+        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-blue-400"></div><span class="text-sm font-semibold text-blue-300">Momentum</span><span class="text-xs text-gray-500 ml-auto">25 pts</span></div>
+        <p class="text-xs text-gray-400">MACD positive (+10), ROC10 &gt;3% (+8), breakout bonus (+7)</p>
+      </div>
+      <div class="bg-gray-900 rounded-lg p-3 border border-green-900">
+        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-green-400"></div><span class="text-sm font-semibold text-green-300">RSI</span><span class="text-xs text-gray-500 ml-auto">20 pts</span></div>
+        <p class="text-xs text-gray-400">Optimal 40–65 zone (+20). Partial 35–70. Penalty at extremes.</p>
+      </div>
+      <div class="bg-gray-900 rounded-lg p-3 border border-orange-900">
+        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-orange-400"></div><span class="text-sm font-semibold text-orange-300">Volume</span><span class="text-xs text-gray-500 ml-auto">15 pts</span></div>
+        <p class="text-xs text-gray-400">2× avg (+15), 1.5× avg (+10), above avg (+5)</p>
+      </div>
+      <div class="bg-gray-900 rounded-lg p-3 border border-amber-900">
+        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-amber-400"></div><span class="text-sm font-semibold text-amber-300">Pattern</span><span class="text-xs text-gray-500 ml-auto">15 pts</span></div>
+        <p class="text-xs text-gray-400">Golden Cross (+15), EMA Bounce (+10), BB Breakout (+8)</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 90-Day Simulation -->
+  <div id="sim-section" class="mb-6">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="text-base font-semibold text-white">90-Day Signal Simulation</h2>
+        <p class="text-xs text-gray-500">Walk-forward: enter at next open, exit at +5% target / −3% stop / 10 days. First 30 symbols.</p>
+      </div>
+    </div>
+    <div id="sim-loading" class="hidden card p-6 text-center text-indigo-400">Running simulation on 30 symbols × 90 trading days…</div>
+    <div class="card overflow-hidden">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
+            <th class="text-left px-4 py-3">Signal</th>
+            <th class="text-right px-4 py-3">Trades</th>
+            <th class="text-right px-4 py-3">Win Rate</th>
+            <th class="text-right px-4 py-3">Avg Return</th>
+            <th class="text-right px-4 py-3">Best</th>
+            <th class="text-right px-4 py-3">Worst</th>
+          </tr>
+        </thead>
+        <tbody id="sim-tbody">
+          <tr><td colspan="6" class="text-center py-8 text-gray-500">Run a scan first, then click "90-Day Sim"</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Initial empty state -->
+  <div id="scanner-empty" class="text-center py-12">
+    <div class="text-5xl mb-4">&#x1F4E1;</div>
+    <h3 class="text-xl font-semibold text-white mb-2">Ready to scan</h3>
+    <p class="text-gray-400 mb-6 max-w-md mx-auto">Click "Run Scan" to score 100+ symbols across quantum computing, AI, semiconductors, energy, data centers, and more.</p>
+    <button onclick="startScan()" class="btn btn-primary text-base px-6 py-2.5">Run First Scan</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
+     TAB 3: PLAYS
      ══════════════════════════════════════════════════ -->
 <div id="page-plays" class="hidden">
   <div class="flex items-center justify-between mb-4">
@@ -523,7 +662,7 @@ function pnlClass(n) { return n>0?'pnl-pos':n<0?'pnl-neg':'text-gray-400'; }
 function biasClass(b) { return b==='BULLISH'?'badge-bull':b==='BEARISH'?'badge-bear':'badge-neutral'; }
 
 // ── Tabs ──────────────────────────────────────────────────────────────
-const TABS = ['watchlist','plays','backtest','history'];
+const TABS = ['watchlist','scanner','plays','backtest','history'];
 function switchTab(t) {
   TABS.forEach(x=>{
     document.getElementById('page-'+x).classList.toggle('hidden', x!==t);
@@ -535,6 +674,8 @@ function switchTab(t) {
   if(t==='watchlist') {
     loadWatchlist();
     refreshTimer = setInterval(loadWatchlist, 60000);
+  } else if(t==='scanner') {
+    initScanner();
   } else if(t==='plays') {
     loadPlays();
     refreshTimer = setInterval(loadPlays, 15000);
@@ -544,6 +685,275 @@ function switchTab(t) {
   } else if(t==='history') {
     loadHistory();
   }
+}
+
+// ── Toast utility ─────────────────────────────────────────────────────
+function showToast(msg, type='success') {
+  const t = document.createElement('div');
+  t.style.cssText = `position:fixed;bottom:24px;right:24px;background:${type==='success'?'#16a34a':'#dc2626'};color:#fff;padding:10px 18px;border-radius:8px;font-size:13px;z-index:9999;opacity:0;transition:opacity 0.2s`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  requestAnimationFrame(()=>{ t.style.opacity='1'; });
+  setTimeout(()=>{ t.style.opacity='0'; setTimeout(()=>t.remove(),300); }, 3000);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// SCANNER
+// ══════════════════════════════════════════════════════════════════════
+let _scanResult = null;
+let _simResult = null;
+let _scanPoll = null;
+let _simPoll = null;
+let _sectorData = [];
+let _selectedSectors = new Set();
+
+async function initScanner() {
+  if (!_sectorData.length) {
+    try { _sectorData = await api('/api/scanner/sectors'); } catch(e) {}
+  }
+  // Restore cached scan result if available
+  try {
+    const st = await api('/api/scanner/status');
+    if (st.running) { _startScanPolling(); }
+    else if (st.result) { _scanResult = st; _renderScan(); _hideScannerEmpty(); }
+  } catch(e) {}
+  // Restore cached sim result
+  try {
+    const ss = await api('/api/scanner/sim_status');
+    if (ss.running) { _startSimPolling(); }
+    else if (ss.result) { _simResult = ss.result; _renderSim(); }
+  } catch(e) {}
+  _renderSectorChips();
+}
+
+async function startScan() {
+  const btn = document.getElementById('scan-btn');
+  btn.disabled = true; btn.textContent = 'Scanning…';
+  document.getElementById('scanner-loading').classList.remove('hidden');
+  document.getElementById('scanner-results').classList.add('hidden');
+  document.getElementById('firing-signals-section').classList.add('hidden');
+  document.getElementById('scanner-empty').classList.add('hidden');
+  try {
+    await api('/api/scanner/start', {method:'POST'});
+    _startScanPolling();
+  } catch(e) {
+    btn.disabled=false; btn.innerHTML='<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg> Run Scan';
+    document.getElementById('scanner-loading').classList.add('hidden');
+    showToast(e.message||'Scan failed','error');
+  }
+}
+
+function _startScanPolling() {
+  clearInterval(_scanPoll);
+  _scanPoll = setInterval(async ()=>{
+    try {
+      const st = await api('/api/scanner/status');
+      const bar = document.getElementById('scan-progress-bar');
+      if (bar) bar.style.width = (st.progress||5)+'%';
+      if (!st.running) {
+        clearInterval(_scanPoll);
+        const btn = document.getElementById('scan-btn');
+        if(btn){ btn.disabled=false; btn.innerHTML='<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg> Run Scan'; }
+        document.getElementById('scanner-loading').classList.add('hidden');
+        if (st.result) { _scanResult = st; _renderScan(); _hideScannerEmpty(); }
+        else if (st.error) { showToast('Scan error: '+st.error,'error'); document.getElementById('scanner-empty').classList.remove('hidden'); }
+      }
+    } catch(e) { clearInterval(_scanPoll); }
+  }, 2000);
+}
+
+async function startSim() {
+  if (!_scanResult) { showToast('Run a scan first','error'); return; }
+  const btn = document.getElementById('sim-btn');
+  btn.disabled=true; btn.textContent='Simulating…';
+  document.getElementById('sim-loading').classList.remove('hidden');
+  try {
+    await api('/api/scanner/sim/start', {method:'POST'});
+    _startSimPolling();
+  } catch(e) {
+    btn.disabled=false; btn.textContent='90-Day Sim';
+    document.getElementById('sim-loading').classList.add('hidden');
+    showToast(e.message||'Sim failed','error');
+  }
+}
+
+function _startSimPolling() {
+  clearInterval(_simPoll);
+  _simPoll = setInterval(async ()=>{
+    try {
+      const ss = await api('/api/scanner/sim_status');
+      if (!ss.running) {
+        clearInterval(_simPoll);
+        const btn = document.getElementById('sim-btn');
+        if(btn){ btn.disabled=false; btn.innerHTML='<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg> 90-Day Sim'; }
+        document.getElementById('sim-loading').classList.add('hidden');
+        if (ss.result) { _simResult = ss.result; _renderSim(); }
+        else if (ss.error) showToast('Sim error: '+ss.error,'error');
+      }
+    } catch(e) { clearInterval(_simPoll); }
+  }, 3000);
+}
+
+function _hideScannerEmpty() {
+  document.getElementById('scanner-empty').classList.add('hidden');
+}
+
+function _filtered() {
+  if (!_scanResult || !_scanResult.result) return [];
+  const all = _scanResult.result.results;
+  if (_selectedSectors.size === 0) return all;
+  return all.filter(r => r.sectors && r.sectors.some(s => _selectedSectors.has(s)));
+}
+
+function _renderScan() {
+  const rows = _filtered();
+  _renderFiringNow(rows);
+  _renderOpportunities(rows);
+  _renderSectorChips();
+}
+
+function _renderSectorChips() {
+  const el = document.getElementById('sector-chips');
+  if (!el) return;
+  const all = _scanResult && _scanResult.result ? _scanResult.result.results : [];
+  const isAll = _selectedSectors.size === 0;
+  let html = `<button onclick="toggleSector('all')" style="border-radius:99px;padding:4px 14px;font-size:13px;font-weight:500;cursor:pointer;border:none;${isAll?'background:#4f46e5;color:#fff':'background:#252535;color:#9ca3af'}">All (${all.length||'—'})</button>`;
+  for (const s of _sectorData) {
+    const active = _selectedSectors.has(s.key);
+    const cnt = all.filter(r => r.sectors && r.sectors.includes(s.key)).length;
+    html += `<button onclick="toggleSector('${s.key}')" style="border-radius:99px;padding:4px 12px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid;${active?`background:${s.color}20;color:${s.color};border-color:${s.color}60`:'background:#1a1a24;color:#9ca3af;border-color:#252535'}">${s.name}${cnt?' ('+cnt+')':''}</button>`;
+  }
+  el.innerHTML = html;
+}
+
+function toggleSector(key) {
+  if (key === 'all') { _selectedSectors.clear(); }
+  else { _selectedSectors.has(key) ? _selectedSectors.delete(key) : _selectedSectors.add(key); }
+  if (_scanResult) _renderScan();
+  else _renderSectorChips();
+}
+
+function _renderFiringNow(rows) {
+  const grid = document.getElementById('firing-grid');
+  const sec = document.getElementById('firing-signals-section');
+  if (!grid || !sec) return;
+  const meta = (_scanResult && _scanResult.result && _scanResult.result.signal_meta) || {};
+  const bySignal = {};
+  for (const r of rows) {
+    for (const sig of (r.firing_signals||[])) {
+      if (!bySignal[sig]) bySignal[sig] = [];
+      bySignal[sig].push(r.symbol);
+    }
+  }
+  const entries = Object.entries(bySignal).filter(([,s])=>s.length>0).sort((a,b)=>b[1].length-a[1].length);
+  if (!entries.length) { sec.classList.add('hidden'); return; }
+  grid.innerHTML = entries.map(([sig, syms])=>{
+    const m = meta[sig]||{label:sig, desc:'', hex:'#6366f1'};
+    const pills = syms.slice(0,6).map(s=>`<span style="display:inline-flex;align-items:center;padding:1px 7px;border-radius:99px;font-size:11px;font-weight:600;background:${m.hex}15;color:${m.hex};border:1px solid ${m.hex}35;margin:1px">${s}</span>`).join('');
+    const more = syms.length>6 ? `<span style="font-size:11px;color:#6b7280">+${syms.length-6}</span>` : '';
+    return `<div class="card p-3" style="border-left:3px solid ${m.hex}">
+      <div style="font-size:13px;font-weight:600;color:${m.hex};margin-bottom:2px">${m.label}</div>
+      <div style="font-size:11px;color:#6b7280;margin-bottom:8px;line-height:1.4">${m.desc}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:2px">${pills}${more}</div>
+    </div>`;
+  }).join('');
+  sec.classList.remove('hidden');
+}
+
+function _renderOpportunities(rows) {
+  const tbody = document.getElementById('scanner-tbody');
+  const res = document.getElementById('scanner-results');
+  const meta_el = document.getElementById('scan-meta');
+  if (!tbody || !res) return;
+  const meta = (_scanResult && _scanResult.result && _scanResult.result.signal_meta) || {};
+  if (meta_el) meta_el.textContent = `${rows.length} symbols · sorted by composite score (0–100)`;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-500">No symbols match selected sectors</td></tr>';
+    res.classList.remove('hidden'); return;
+  }
+  const compColors = {trend:'#818cf8',momentum:'#60a5fa',rsi:'#4ade80',volume:'#fb923c',pattern:'#f59e0b'};
+  const compMax = {trend:25,momentum:25,rsi:20,volume:15,pattern:15};
+  tbody.innerHTML = rows.slice(0,40).map((r,i)=>{
+    const gc = r.score>=80?'#4ade80':r.score>=65?'#86efac':r.score>=50?'#fbbf24':r.score>=35?'#fb923c':'#f87171';
+    const sigBadges = (r.firing_signals||[]).map(sig=>{
+      const m = meta[sig]||{label:sig,hex:'#6366f1'};
+      return `<span style="display:inline-flex;align-items:center;padding:1px 6px;border-radius:99px;font-size:11px;font-weight:600;background:${m.hex}20;color:${m.hex};border:1px solid ${m.hex}40;margin-right:2px">${m.label}</span>`;
+    }).join('');
+    const bars = Object.entries(r.breakdown||{}).map(([k,v])=>{
+      const pct = compMax[k]>0?(v/compMax[k]*100):0;
+      return `<div title="${k}: ${v}/${compMax[k]}" style="height:5px;width:${Math.max(3,pct*0.44)}px;background:${compColors[k]||'#6366f1'};border-radius:2px;display:inline-block;margin-right:1px"></div>`;
+    }).join('');
+    const rsiCol = r.rsi>70?'#f87171':r.rsi<30?'#4ade80':'#d1d5db';
+    const volCol = r.vol_ratio>=1.5?'#fbbf24':'#d1d5db';
+    const bgRow = i%2===0?'':'background:#111118';
+    return `<tr class="border-b border-gray-700" style="${bgRow}">
+      <td class="px-4 py-2.5 font-bold text-white">${r.symbol}</td>
+      <td class="px-4 py-2.5 text-right text-gray-200">$${r.price}</td>
+      <td class="px-4 py-2.5">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:18px;font-weight:700;color:${gc}">${r.score}</span>
+          <span style="font-size:12px;font-weight:700;color:${gc};background:${gc}15;padding:1px 5px;border-radius:4px">${r.grade}</span>
+          <div style="display:flex;align-items:flex-end;gap:1px;margin-top:1px">${bars}</div>
+        </div>
+      </td>
+      <td class="px-4 py-2.5">${sigBadges||'<span style="font-size:11px;color:#4b5563">—</span>'}</td>
+      <td class="px-4 py-2.5 text-right" style="color:${rsiCol};font-weight:500">${r.rsi}</td>
+      <td class="px-4 py-2.5 text-right" style="color:${volCol};font-weight:500">${r.vol_ratio}×</td>
+      <td class="px-4 py-2.5 text-center">
+        <div style="display:flex;gap:4px;justify-content:center">
+          <button onclick="addScannerToWL('${r.symbol}')" class="btn btn-primary" style="padding:3px 10px;font-size:12px">+ WL</button>
+          <button onclick="addScannerToNewPlay('${r.symbol}','${r.price}')" class="btn btn-ghost" style="padding:3px 10px;font-size:12px">Play</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+  res.classList.remove('hidden');
+}
+
+function _renderSim() {
+  const tbody = document.getElementById('sim-tbody');
+  if (!tbody || !_simResult || !_simResult.length) return;
+  tbody.innerHTML = _simResult.map(row=>{
+    const wc = row.win_rate>=60?'#4ade80':row.win_rate>=45?'#fbbf24':'#f87171';
+    const rc = row.avg_return>=1?'#4ade80':row.avg_return>=0?'#fbbf24':'#f87171';
+    return `<tr class="border-b border-gray-700">
+      <td class="px-4 py-3"><span style="color:${row.hex};font-weight:600">${row.label}</span></td>
+      <td class="px-4 py-3 text-right text-gray-300">${row.count}</td>
+      <td class="px-4 py-3 text-right font-semibold" style="color:${wc}">${row.win_rate}%</td>
+      <td class="px-4 py-3 text-right font-semibold" style="color:${rc}">${row.avg_return>0?'+':''}${row.avg_return}%</td>
+      <td class="px-4 py-3 text-right text-green-400">+${row.best}%</td>
+      <td class="px-4 py-3 text-right text-red-400">${row.worst}%</td>
+    </tr>`;
+  }).join('');
+}
+
+async function addScannerToWL(sym) {
+  try {
+    await api('/api/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:sym})});
+    showToast(sym+' added to Watchlist');
+  } catch(e) { showToast(sym+' already in Watchlist','error'); }
+}
+
+function addScannerToNewPlay(sym, price) {
+  switchTab('plays');
+  setTimeout(()=>{
+    openNewPlay();
+    const s = document.getElementById('np-symbol');
+    if(s){ s.value=sym; s.dispatchEvent(new Event('blur')); }
+  }, 100);
+}
+
+async function pushTopPicks(n=5) {
+  if (!_scanResult || !_scanResult.result) return;
+  const top = _filtered().slice(0,n);
+  let added = 0;
+  for (const r of top) {
+    try {
+      await api('/api/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:r.symbol})});
+      added++;
+    } catch(e) {}
+  }
+  showToast(`Added ${added} symbol${added!==1?'s':''} to Watchlist`);
 }
 
 // ── Modals ───────────────────────────────────────────────────────────
@@ -1167,6 +1577,7 @@ async function exportHistory() {
 function refreshAll() {
   const active = TABS.find(t=>!document.getElementById('page-'+t).classList.contains('hidden'));
   if(active==='watchlist') loadWatchlist();
+  else if(active==='scanner') initScanner();
   else if(active==='plays') loadPlays();
   else if(active==='backtest') { loadBtLatest(); loadBtHistory(); }
   else if(active==='history') loadHistory();
