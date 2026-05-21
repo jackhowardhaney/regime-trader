@@ -408,7 +408,11 @@
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="block text-xs text-gray-500 mb-1">Symbol</label>
-          <input id="np-symbol" type="text" class="input" placeholder="AAPL" />
+          <div class="flex gap-2">
+            <input id="np-symbol" type="text" class="input" placeholder="AAPL"
+              onblur="fetchPlayLiveData()" onkeydown="if(event.key==='Enter')fetchPlayLiveData()" />
+            <button onclick="fetchPlayLiveData()" class="btn btn-ghost px-3 text-xs whitespace-nowrap" id="np-fetch-btn" title="Fetch live price & RSI">↻</button>
+          </div>
         </div>
         <div>
           <label class="block text-xs text-gray-500 mb-1">Direction</label>
@@ -417,6 +421,16 @@
             <option value="SHORT">SHORT</option>
           </select>
         </div>
+      </div>
+      <!-- Live data bar — hidden until a symbol is fetched -->
+      <div id="np-live-bar" class="hidden bg-gray-900 rounded-lg px-3 py-2 flex items-center gap-4 text-xs">
+        <span class="text-gray-500">Live</span>
+        <span class="text-white font-mono font-semibold" id="np-live-price">—</span>
+        <span class="text-gray-500">RSI</span>
+        <span class="font-semibold" id="np-live-rsi">—</span>
+        <span class="text-gray-500">Bias</span>
+        <span class="font-semibold" id="np-live-bias">—</span>
+        <span id="np-live-status" class="ml-auto text-gray-600"></span>
       </div>
       <div class="grid grid-cols-3 gap-3">
         <div>
@@ -776,7 +790,44 @@ function openNewPlay() {
   ['np-symbol','np-entry','np-stop','np-tp','np-shares','np-notes'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('np-submit-order').checked = false;
   document.getElementById('np-rr').textContent = '—';
+  document.getElementById('np-live-bar').classList.add('hidden');
   openModal('modal-new-play');
+}
+
+async function fetchPlayLiveData() {
+  const sym = document.getElementById('np-symbol').value.trim().toUpperCase();
+  if (!sym) return;
+  const btn = document.getElementById('np-fetch-btn');
+  const bar = document.getElementById('np-live-bar');
+  const status = document.getElementById('np-live-status');
+  btn.textContent = '…';
+  btn.disabled = true;
+  bar.classList.remove('hidden');
+  status.textContent = 'Fetching…';
+  try {
+    const s = await api('/api/signals/' + sym);
+    if (s.error) { status.textContent = '⚠ ' + s.error; btn.textContent = '↻'; btn.disabled = false; return; }
+
+    // Populate live bar
+    document.getElementById('np-live-price').textContent = '$' + s.price.toFixed(2);
+    const rsiEl = document.getElementById('np-live-rsi');
+    rsiEl.textContent = s.rsi.toFixed(1);
+    rsiEl.className = 'font-semibold ' + (s.rsi > 70 ? 'text-red-400' : s.rsi < 30 ? 'text-green-400' : 'text-yellow-400');
+    const biasEl = document.getElementById('np-live-bias');
+    biasEl.textContent = s.overall;
+    biasEl.className = 'font-semibold ' + (s.overall === 'BULLISH' ? 'text-green-400' : s.overall === 'BEARISH' ? 'text-red-400' : 'text-yellow-400');
+    status.textContent = '✓ auto-filled';
+
+    // Auto-fill price fields only if they're empty
+    if (!document.getElementById('np-entry').value) document.getElementById('np-entry').value = s.suggested_entry.toFixed(2);
+    if (!document.getElementById('np-stop').value)  document.getElementById('np-stop').value  = s.suggested_stop.toFixed(2);
+    if (!document.getElementById('np-tp').value)    document.getElementById('np-tp').value    = s.suggested_target.toFixed(2);
+    updateRR();
+  } catch(e) {
+    status.textContent = '⚠ fetch failed';
+  }
+  btn.textContent = '↻';
+  btn.disabled = false;
 }
 
 function prefillPlay(sym, price, stop, target) {
@@ -932,12 +983,29 @@ function pollBtStatus() {
   }, 2000);
 }
 
-function showBtError(msg) {
+function showBtError(raw) {
   document.getElementById('bt-run-btn').disabled = false;
   document.getElementById('bt-run-btn').textContent = 'Run Backtest';
   document.getElementById('bt-progress-section').classList.add('hidden');
   const el = document.getElementById('bt-error');
   el.classList.remove('hidden');
+
+  // Parse common traceback patterns into human-readable messages
+  let msg = raw || 'Unknown error';
+  const emptyMatch = msg.match(/empty response for (\S+)/i);
+  const barsMatch  = msg.match(/Need at least (\d+) bars, have (\d+)/i);
+  if (emptyMatch) {
+    msg = `Symbol "${emptyMatch[1]}" not found — check the ticker and try again.`;
+  } else if (barsMatch) {
+    const have = parseInt(barsMatch[2]);
+    msg = have === 0
+      ? `No data returned — "${document.getElementById('bt-symbols').value}" may be an invalid or delisted ticker.`
+      : `Not enough history: need 630 trading days, got ${have}. Try an earlier start date.`;
+  } else {
+    // Show just the last ValueError / RuntimeError line, not the full traceback
+    const errLine = msg.split('\n').reverse().find(l => l.trim().length > 0);
+    msg = errLine || msg;
+  }
   el.textContent = msg;
 }
 
