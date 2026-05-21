@@ -47,6 +47,7 @@
   .badge-bear { background: #7f1d1d40; color: #f87171; border: 1px solid #991b1b; }
   .badge-neutral { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
   .pnl-pos { color: #4ade80; }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .pnl-neg { color: #f87171; }
   .scrollbar-thin::-webkit-scrollbar { width: 4px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
@@ -82,11 +83,11 @@
       <button onclick="switchTab('history')" id="tab-history" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">History</button>
     </nav>
     <!-- Portfolio pill -->
-    <div id="portfolio-pill" class="text-sm text-gray-400 flex items-center gap-2">
+    <div id="portfolio-pill" class="text-sm text-gray-400 flex items-center gap-3">
       <div class="w-2 h-2 rounded-full bg-gray-600" id="port-dot"></div>
       <span id="port-label">Connecting…</span>
     </div>
-    <button onclick="refreshAll()" class="btn btn-ghost text-xs py-1.5 px-3">&#8635; Refresh</button>
+    <button onclick="refreshAll()" id="refresh-btn" class="btn btn-ghost text-xs py-1.5 px-3">&#8635; Refresh</button>
   </div>
 </header>
 
@@ -1152,7 +1153,15 @@ async function loadPortfolio() {
     const lbl = document.getElementById('port-label');
     if(p.connected) {
       dot.className = 'w-2 h-2 rounded-full bg-green-400';
-      lbl.innerHTML = `<span class="text-white font-medium">${fmt$(p.equity)}</span> <span class="text-gray-500 ml-1">+${fmt$(p.day_pl)} today</span>`;
+      const pnl = p.unrealized_pnl ?? 0;
+      const pnlSign = pnl >= 0 ? '+' : '';
+      const pnlColor = pnl > 0 ? '#4ade80' : pnl < 0 ? '#f87171' : '#9ca3af';
+      const invested = p.invested ?? 0;
+      const positions = p.open_positions ?? 0;
+      lbl.innerHTML = `<span class="text-white font-medium">${fmt$(invested)} invested</span>`
+        + (positions > 0
+          ? ` <span class="text-gray-500">·</span> <span style="color:${pnlColor}" class="font-medium">${pnlSign}${fmt$(pnl)}</span> <span class="text-gray-500 text-xs">unrealized</span>`
+          : ` <span class="text-gray-500 text-xs">(no open positions)</span>`);
     } else {
       dot.className = 'w-2 h-2 rounded-full bg-yellow-400';
       lbl.textContent = 'Alpaca not connected';
@@ -1792,13 +1801,19 @@ async function exportHistory() {
 
 // ── Init ──────────────────────────────────────────────────────────────
 function refreshAll() {
+  const btn = document.getElementById('refresh-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span style="display:inline-block;animation:spin 0.7s linear infinite">&#8635;</span> Refreshing…';
   const active = TABS.find(t=>!document.getElementById('page-'+t).classList.contains('hidden'));
-  if(active==='watchlist') loadWatchlist();
-  else if(active==='scanner') initScanner();
-  else if(active==='plays') loadPlays();
-  else if(active==='backtest') { loadBtLatest(); loadBtHistory(); }
-  else if(active==='history') loadHistory();
-  loadPortfolio();
+  const done = () => { btn.disabled = false; btn.innerHTML = '&#8635; Refresh'; };
+  let p;
+  if(active==='watchlist') p = loadWatchlist();
+  else if(active==='scanner') p = Promise.resolve(initScanner());
+  else if(active==='plays') p = loadPlays();
+  else if(active==='backtest') p = Promise.all([loadBtLatest(), loadBtHistory()]);
+  else if(active==='history') p = loadHistory();
+  else p = Promise.resolve();
+  Promise.all([p, loadPortfolio()]).finally(done);
 }
 
 // Boot

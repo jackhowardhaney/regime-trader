@@ -821,6 +821,27 @@ def get_portfolio():
         acct = client.get_account()
         equity = float(acct.get("equity", 0))
         last_equity = float(acct.get("last_equity", equity))
+
+        # Compute invested capital and unrealized PNL from active plays
+        invested = 0.0
+        unrealized_pnl = 0.0
+        open_count = 0
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT symbol, entry_price, shares, direction FROM plays WHERE status='ACTIVE'"
+            ).fetchall()
+        for row in rows:
+            cost = (row["entry_price"] or 0) * (row["shares"] or 0)
+            invested += cost
+            open_count += 1
+            q = get_quote(row["symbol"])
+            if q:
+                cur = q["price"]
+                if row["direction"] == "LONG":
+                    unrealized_pnl += (cur - (row["entry_price"] or cur)) * (row["shares"] or 0)
+                else:
+                    unrealized_pnl += ((row["entry_price"] or cur) - cur) * (row["shares"] or 0)
+
         return {
             "connected": True,
             "equity": equity,
@@ -828,6 +849,9 @@ def get_portfolio():
             "buying_power": float(acct.get("buying_power", 0)),
             "day_pl": round(equity - last_equity, 2),
             "day_pl_pct": round((equity - last_equity) / last_equity * 100, 2) if last_equity else 0,
+            "invested": round(invested, 2),
+            "unrealized_pnl": round(unrealized_pnl, 2),
+            "open_positions": open_count,
             "paper": True,
         }
     except Exception as e:
