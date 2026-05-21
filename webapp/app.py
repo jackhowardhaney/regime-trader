@@ -150,6 +150,8 @@ class PlayUpdate(BaseModel):
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
     notes: Optional[str] = None
+    status: Optional[str] = None
+    alpaca_order_id: Optional[str] = None
 
 
 class PlayClose(BaseModel):
@@ -639,6 +641,10 @@ def update_play(pid: int, body: PlayUpdate):
         sets.append("take_profit=?"); vals.append(body.take_profit)
     if body.notes is not None:
         sets.append("notes=?"); vals.append(body.notes)
+    if body.status is not None:
+        sets.append("status=?"); vals.append(body.status)
+    if body.alpaca_order_id is not None:
+        sets.append("alpaca_order_id=?"); vals.append(body.alpaca_order_id)
     if not sets:
         raise HTTPException(400, "Nothing to update")
     vals.append(pid)
