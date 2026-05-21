@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Regime Trader</title>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://www.youtube.com/iframe_api"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
   tailwind.config = {
@@ -64,14 +65,15 @@
 </head>
 <body class="h-full text-gray-200 antialiased">
 
+<!-- YouTube player target (lives outside modal so it persists) -->
+<div id="yt-player" style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;bottom:0;right:0"></div>
+
 <!-- ── Startup Modal ── -->
 <div id="startup-modal" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.92);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)">
   <div style="background:#111118;border:1px solid #2d2d44;border-radius:20px;padding:52px 48px;text-align:center;max-width:380px;box-shadow:0 0 60px rgba(99,102,241,0.15)">
     <div style="font-size:52px;margin-bottom:20px">🖨️</div>
     <h2 style="font-size:30px;font-weight:800;color:#fff;margin-bottom:6px;letter-spacing:-0.5px">Ready to print?</h2>
     <p style="color:#6b7280;font-size:13px;margin-bottom:32px">Regime Trader is loading your portfolio</p>
-    <!-- iframe injected on OK click to guarantee autoplay after user gesture -->
-    <div id="yt-container" style="position:absolute;opacity:0;pointer-events:none;width:1px;height:1px"></div>
     <button onclick="closeStartup()" style="background:#6366f1;color:#fff;border:none;border-radius:10px;padding:14px 48px;font-size:16px;font-weight:700;cursor:pointer;letter-spacing:0.3px;transition:opacity 0.15s" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">OK</button>
   </div>
 </div>
@@ -1828,18 +1830,44 @@ function refreshAll() {
   Promise.all([p, loadPortfolio()]).finally(done);
 }
 
+var _ytPlayer = null;
+// Called automatically by YouTube IFrame API when ready
+function onYouTubeIframeAPIReady() {
+  _ytPlayer = new YT.Player('yt-player', {
+    videoId: '998gtPrpN_Y',
+    playerVars: { autoplay: 0, start: 16, controls: 0, disablekb: 1, fs: 0, rel: 0 },
+    events: {
+      onReady: function(e) { /* player ready, waiting for OK click */ }
+    }
+  });
+}
+
 function closeStartup() {
-  // Inject iframe HERE — after user click guarantees browser allows autoplay
-  const container = document.getElementById('yt-container');
-  if (container) {
-    container.innerHTML = '<iframe width="1" height="1" src="https://www.youtube.com/embed/998gtPrpN_Y?autoplay=1&start=16&enablejsapi=1" allow="autoplay; encrypted-media" frameborder="0"></iframe>';
-    // Auto-stop after 15 seconds
-    setTimeout(() => { container.innerHTML = ''; }, 15000);
-  }
+  // Dismiss modal
   const modal = document.getElementById('startup-modal');
   modal.style.transition = 'opacity 0.3s';
   modal.style.opacity = '0';
   setTimeout(() => modal.remove(), 300);
+
+  // Play at max volume from 0:16, stop after 15s
+  function _play() {
+    _ytPlayer.setVolume(100);
+    _ytPlayer.seekTo(16, true);
+    _ytPlayer.playVideo();
+    setTimeout(() => { try { _ytPlayer.stopVideo(); } catch(e) {} }, 15000);
+  }
+
+  if (_ytPlayer && typeof _ytPlayer.playVideo === 'function') {
+    _play();
+  } else {
+    // API not loaded yet — poll briefly
+    let tries = 0;
+    const iv = setInterval(() => {
+      if (_ytPlayer && typeof _ytPlayer.playVideo === 'function') {
+        clearInterval(iv); _play();
+      } else if (++tries > 20) clearInterval(iv);
+    }, 150);
+  }
 }
 
 // Boot
