@@ -241,6 +241,112 @@ def run_scan(
     return sorted(results, key=lambda x: -x["score"])
 
 
+def backtest_symbol(
+    load_bars_fn: Callable,
+    symbol: str,
+    days: int = 90,
+) -> Optional[Dict]:
+    """
+    90-day walk-forward backtest for a single symbol.
+    Any bar where at least one signal fires → enter at next open,
+    exit at +5% target / -3% stop / 10-day hold.
+    Returns detailed stats + qualified flag (used for real-money gate).
+    """
+    try:
+        df = load_bars_fn(symbol, days=250)
+    except Exception:
+        return None
+    if df is None or len(df) < 110:
+        return None
+
+    open_ = df["open"].astype(float)
+    high_ = df["high"].astype(float)
+    low_ = df["low"].astype(float)
+    close_ = df["close"].astype(float)
+    n = len(df)
+    window_start = max(55, n - days)
+
+    trades: List[float] = []
+    signals_per_trade: List[List[str]] = []
+    seen: set = set()
+
+    for i in range(window_start, n - 11):
+        scored = score_symbol(df.iloc[: i + 1], symbol)
+        if not scored or not scored["firing_signals"] or i in seen:
+            continue
+        seen.add(i)
+        entry = float(open_.iloc[i + 1])
+        if entry <= 0:
+            continue
+        target = entry * 1.05
+        stop = entry * 0.97
+        exit_px = float(close_.iloc[min(i + 10, n - 1)])
+        for j in range(i + 1, min(i + 11, n)):
+            if float(high_.iloc[j]) >= target:
+                exit_px = target
+                break
+            if float(low_.iloc[j]) <= stop:
+                exit_px = stop
+                break
+        trades.append((exit_px / entry - 1) * 100)
+        signals_per_trade.append(scored["firing_signals"])
+
+    if not trades:
+        return {
+            "symbol": symbol,
+            "period_days": days,
+            "total_trades": 0,
+            "winning_trades": 0,
+            "win_rate": 0.0,
+            "avg_return": 0.0,
+            "best_trade": 0.0,
+            "worst_trade": 0.0,
+            "profit_factor": 0.0,
+            "max_drawdown": 0.0,
+            "qualified": False,
+            "fail_reason": "No signals fired in 90-day window",
+        }
+
+    wins = [t for t in trades if t > 0]
+    losses = [t for t in trades if t <= 0]
+    win_rate = len(wins) / len(trades) * 100
+    avg_return = sum(trades) / len(trades)
+    profit_factor = sum(wins) / abs(sum(losses)) if losses else 99.0
+
+    equity, peak, max_dd = 100.0, 100.0, 0.0
+    for t in trades:
+        equity *= 1 + t / 100
+        peak = max(peak, equity)
+        max_dd = max(max_dd, (peak - equity) / peak * 100)
+
+    # Qualification thresholds for real-money eligibility
+    fail_reasons = []
+    if win_rate < 50:
+        fail_reasons.append(f"win rate {win_rate:.0f}% < 50%")
+    if avg_return < 0.5:
+        fail_reasons.append(f"avg return {avg_return:.2f}% < 0.5%")
+    if profit_factor < 1.2:
+        fail_reasons.append(f"profit factor {profit_factor:.2f} < 1.2")
+    if len(trades) < 3:
+        fail_reasons.append(f"only {len(trades)} trades (need ≥3)")
+    qualified = len(fail_reasons) == 0
+
+    return {
+        "symbol": symbol,
+        "period_days": days,
+        "total_trades": len(trades),
+        "winning_trades": len(wins),
+        "win_rate": round(win_rate, 1),
+        "avg_return": round(avg_return, 2),
+        "best_trade": round(max(trades), 2),
+        "worst_trade": round(min(trades), 2),
+        "profit_factor": round(min(profit_factor, 99.0), 2),
+        "max_drawdown": round(max_dd, 2),
+        "qualified": qualified,
+        "fail_reason": "; ".join(fail_reasons) if fail_reasons else None,
+    }
+
+
 def run_90day_sim(
     load_bars_fn: Callable,
     symbols: List[str],

@@ -137,14 +137,18 @@
       <h1 class="text-xl font-semibold text-white">Hand Picks Scanner</h1>
       <p class="text-sm text-gray-500 mt-0.5">100+ sector symbols — composite score across momentum, trend, RSI, volume &amp; patterns. Push top picks directly to the bot.</p>
     </div>
-    <div class="flex gap-2">
+    <div class="flex gap-2 flex-wrap">
       <button onclick="startScan()" id="scan-btn" class="btn btn-primary">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
         Run Scan
       </button>
+      <button onclick="startQualBt()" id="qbt-btn" class="btn btn-ghost" style="border-color:#16a34a;color:#4ade80">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+        Qualify All (90-Day BT)
+      </button>
       <button onclick="startSim()" id="sim-btn" class="btn btn-ghost">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-        90-Day Sim
+        Signal Sim
       </button>
     </div>
   </div>
@@ -152,6 +156,54 @@
   <!-- Sector filter chips -->
   <div id="sector-chips" class="flex flex-wrap gap-2 mb-5">
     <button style="border-radius:99px;padding:4px 14px;font-size:13px;font-weight:500;background:#4f46e5;color:#fff;border:none;cursor:pointer">All Sectors</button>
+  </div>
+
+  <!-- Qualification backtest loading -->
+  <div id="qbt-loading" class="hidden mb-5">
+    <div class="card p-5">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-green-400 font-semibold text-sm">Running 90-Day Qualification Backtests…</span>
+        <span class="text-xs text-gray-400" id="qbt-counter">0 / 0</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="qbt-progress-bar" style="width:2%;background:linear-gradient(90deg,#16a34a,#4ade80)"></div></div>
+      <p class="text-xs text-gray-500 mt-2">Backtesting each symbol over the last 90 trading days — results stored for real money qualification</p>
+    </div>
+  </div>
+
+  <!-- Real Money Pipeline -->
+  <div id="pipeline-section" class="hidden mb-6">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="text-base font-semibold text-white">&#x1F7E2; Real Money Pipeline</h2>
+        <p class="text-xs text-gray-500">Symbols that passed 90-day qualification: win rate ≥50%, avg return ≥0.5%, profit factor ≥1.2, ≥3 trades</p>
+      </div>
+      <span id="pipeline-count" class="text-sm font-semibold text-green-400"></span>
+    </div>
+    <div class="card overflow-hidden mb-3">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
+            <th class="text-left px-4 py-3">Symbol</th>
+            <th class="text-right px-4 py-3">Win Rate</th>
+            <th class="text-right px-4 py-3">Avg Return</th>
+            <th class="text-right px-4 py-3">Profit Factor</th>
+            <th class="text-right px-4 py-3">Trades</th>
+            <th class="text-right px-4 py-3">Max DD</th>
+            <th class="text-right px-4 py-3">Best / Worst</th>
+            <th class="text-center px-4 py-3">Tested</th>
+          </tr>
+        </thead>
+        <tbody id="pipeline-tbody">
+          <tr><td colspan="8" class="text-center py-6 text-gray-500">No qualified symbols yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="pipeline-failed" class="hidden">
+      <details class="card p-4">
+        <summary class="text-xs text-gray-500 cursor-pointer">Show symbols that did not qualify</summary>
+        <div id="pipeline-failed-list" class="mt-3 flex flex-wrap gap-2"></div>
+      </details>
+    </div>
   </div>
 
   <!-- Scan loading state -->
@@ -188,6 +240,7 @@
             <th class="text-left px-4 py-3">Symbol</th>
             <th class="text-right px-4 py-3">Price</th>
             <th class="px-4 py-3">BSH Score</th>
+            <th class="text-center px-4 py-3">90-Day BT</th>
             <th class="px-4 py-3">Firing Signals</th>
             <th class="text-right px-4 py-3">RSI</th>
             <th class="text-right px-4 py-3">Vol</th>
@@ -561,14 +614,22 @@
         </div>
       </div>
       <!-- Live data bar — hidden until a symbol is fetched -->
-      <div id="np-live-bar" class="hidden bg-gray-900 rounded-lg px-3 py-2 flex items-center gap-4 text-xs">
-        <span class="text-gray-500">Live</span>
-        <span class="text-white font-mono font-semibold" id="np-live-price">—</span>
-        <span class="text-gray-500">RSI</span>
-        <span class="font-semibold" id="np-live-rsi">—</span>
-        <span class="text-gray-500">Bias</span>
-        <span class="font-semibold" id="np-live-bias">—</span>
-        <span id="np-live-status" class="ml-auto text-gray-600"></span>
+      <div id="np-live-bar" class="hidden bg-gray-900 rounded-lg px-3 py-2 text-xs" style="display:none">
+        <div class="flex items-center gap-4 flex-wrap">
+          <span class="text-gray-500">Price</span>
+          <span class="text-white font-mono font-semibold" id="np-live-price">—</span>
+          <span class="text-gray-500">RSI</span>
+          <span class="font-semibold" id="np-live-rsi">—</span>
+          <span class="text-gray-500">BSH</span>
+          <span class="font-semibold" id="np-live-bias">—</span>
+          <span id="np-live-bt" class="ml-auto"></span>
+          <span id="np-live-status" class="text-gray-600"></span>
+        </div>
+        <div class="flex items-center gap-2 mt-1.5 text-gray-500">
+          <span>Stop method:</span>
+          <span id="np-stop-method" class="text-indigo-400">—</span>
+          <span class="ml-3">R:R target: 2.5:1</span>
+        </div>
       </div>
       <div class="grid grid-cols-3 gap-3">
         <div>
@@ -710,17 +771,24 @@ async function initScanner() {
   if (!_sectorData.length) {
     try { _sectorData = await api('/api/scanner/sectors'); } catch(e) {}
   }
-  // Restore cached scan result if available
+  // Load stored backtest results
+  await _loadBtResults();
+  // Restore in-progress or cached scan
   try {
     const st = await api('/api/scanner/status');
     if (st.running) { _startScanPolling(); }
     else if (st.result) { _scanResult = st; _renderScan(); _hideScannerEmpty(); }
   } catch(e) {}
-  // Restore cached sim result
+  // Restore in-progress or cached sim
   try {
     const ss = await api('/api/scanner/sim_status');
     if (ss.running) { _startSimPolling(); }
     else if (ss.result) { _simResult = ss.result; _renderSim(); }
+  } catch(e) {}
+  // Restore in-progress backtest run
+  try {
+    const bs = await api('/api/scanner/backtest/status');
+    if (bs.running) { _startQbtPolling(); document.getElementById('qbt-loading').classList.remove('hidden'); }
   } catch(e) {}
   _renderSectorChips();
 }
@@ -867,7 +935,7 @@ function _renderOpportunities(rows) {
   const meta = (_scanResult && _scanResult.result && _scanResult.result.signal_meta) || {};
   if (meta_el) meta_el.textContent = `${rows.length} symbols · sorted by composite score (0–100)`;
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-500">No symbols match selected sectors</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="text-center py-8 text-gray-500">No symbols match selected sectors</td></tr>';
     res.classList.remove('hidden'); return;
   }
   const compColors = {trend:'#818cf8',momentum:'#60a5fa',rsi:'#4ade80',volume:'#fb923c',pattern:'#f59e0b'};
@@ -899,6 +967,7 @@ function _renderOpportunities(rows) {
           <div style="display:flex;align-items:flex-end;gap:1px">${bars}</div>
         </div>
       </td>
+      <td class="px-4 py-2.5 text-center">${_btBadge(r.symbol)}</td>
       <td class="px-4 py-2.5">${sigBadges||'<span style="font-size:11px;color:#4b5563">—</span>'}</td>
       <td class="px-4 py-2.5 text-right" style="color:${rsiCol};font-weight:500">${r.rsi}</td>
       <td class="px-4 py-2.5 text-right" style="color:${volCol};font-weight:500">${r.vol_ratio}×</td>
@@ -944,6 +1013,116 @@ function addScannerToNewPlay(sym, price) {
     const s = document.getElementById('np-symbol');
     if(s){ s.value=sym; s.dispatchEvent(new Event('blur')); }
   }, 100);
+}
+
+// ── Qualification Backtest ────────────────────────────────────────────
+let _qbtResults = {};   // symbol → backtest result
+let _qbtPoll = null;
+
+async function _loadBtResults() {
+  try {
+    const rows = await api('/api/scanner/backtest/results');
+    _qbtResults = {};
+    for (const r of rows) _qbtResults[r.symbol] = r;
+    _renderPipeline();
+    if (_scanResult) _renderScan();  // refresh BT column in table
+  } catch(e) {}
+}
+
+function _btBadge(sym) {
+  const r = _qbtResults[sym];
+  if (!r) return '<span style="font-size:11px;color:#4b5563;cursor:pointer" onclick="runSingleBt(\''+sym+'\')">Run BT</span>';
+  if (r.qualified) return '<span style="display:inline-flex;align-items:center;padding:1px 7px;border-radius:99px;font-size:11px;font-weight:700;background:#14532d40;color:#4ade80;border:1px solid #166534" title="Win: '+r.win_rate+'% | Avg: '+r.avg_return+'% | PF: '+r.profit_factor+'">READY ✓</span>';
+  return '<span style="display:inline-flex;align-items:center;padding:1px 7px;border-radius:99px;font-size:11px;font-weight:700;background:#7f1d1d40;color:#f87171;border:1px solid #991b1b" title="'+r.fail_reason+'">FAIL</span>';
+}
+
+async function startQualBt() {
+  const btn = document.getElementById('qbt-btn');
+  btn.disabled = true; btn.textContent = 'Running…';
+  document.getElementById('qbt-loading').classList.remove('hidden');
+  try {
+    await api('/api/scanner/backtest/start', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    _startQbtPolling();
+  } catch(e) {
+    btn.disabled=false;
+    btn.innerHTML='<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Qualify All (90-Day BT)';
+    document.getElementById('qbt-loading').classList.add('hidden');
+    showToast(e.message||'Backtest failed','error');
+  }
+}
+
+async function runSingleBt(sym) {
+  showToast('Queuing backtest for '+sym+'…');
+  try {
+    await api('/api/scanner/backtest/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbols:[sym]})});
+    _startQbtPolling();
+  } catch(e) {}
+}
+
+function _startQbtPolling() {
+  clearInterval(_qbtPoll);
+  _qbtPoll = setInterval(async ()=>{
+    try {
+      const st = await api('/api/scanner/backtest/status');
+      const bar = document.getElementById('qbt-progress-bar');
+      const ctr = document.getElementById('qbt-counter');
+      if (bar) bar.style.width = Math.max(2, st.progress||2)+'%';
+      if (ctr) ctr.textContent = `${st.completed||0} / ${st.total||0}`;
+      if (!st.running) {
+        clearInterval(_qbtPoll);
+        const btn = document.getElementById('qbt-btn');
+        if(btn){ btn.disabled=false; btn.innerHTML='<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Qualify All (90-Day BT)'; }
+        document.getElementById('qbt-loading').classList.add('hidden');
+        if (st.result) {
+          _qbtResults = {};
+          for (const r of st.result) _qbtResults[r.symbol] = r;
+          _renderPipeline();
+          if (_scanResult) _renderScan();
+          const qualified = st.result.filter(r=>r.qualified).length;
+          showToast(`Backtests complete — ${qualified} symbols READY for live trading`);
+        } else if (st.error) showToast('Backtest error: '+st.error, 'error');
+      }
+    } catch(e) { clearInterval(_qbtPoll); }
+  }, 2500);
+}
+
+function _renderPipeline() {
+  const sec = document.getElementById('pipeline-section');
+  const tbody = document.getElementById('pipeline-tbody');
+  const countEl = document.getElementById('pipeline-count');
+  const failedSec = document.getElementById('pipeline-failed');
+  const failedList = document.getElementById('pipeline-failed-list');
+  if (!sec || !tbody) return;
+
+  const all = Object.values(_qbtResults);
+  if (!all.length) return;
+
+  const ready = all.filter(r=>r.qualified).sort((a,b)=>b.win_rate-a.win_rate);
+  const failed = all.filter(r=>!r.qualified);
+
+  if (countEl) countEl.textContent = `${ready.length} of ${all.length} READY`;
+
+  tbody.innerHTML = ready.length ? ready.map((r,i)=>{
+    const bg = i%2===0?'':'background:#111118';
+    const retColor = r.avg_return>=1?'#4ade80':r.avg_return>=0?'#fbbf24':'#f87171';
+    return `<tr class="border-b border-gray-700" style="${bg}">
+      <td class="px-4 py-2.5 font-bold text-white">${r.symbol}</td>
+      <td class="px-4 py-2.5 text-right text-green-400 font-semibold">${r.win_rate}%</td>
+      <td class="px-4 py-2.5 text-right font-semibold" style="color:${retColor}">${r.avg_return>0?'+':''}${r.avg_return}%</td>
+      <td class="px-4 py-2.5 text-right text-gray-200">${r.profit_factor}</td>
+      <td class="px-4 py-2.5 text-right text-gray-300">${r.total_trades}</td>
+      <td class="px-4 py-2.5 text-right text-red-400">${r.max_drawdown}%</td>
+      <td class="px-4 py-2.5 text-right text-xs"><span class="text-green-400">+${r.best_trade}%</span> / <span class="text-red-400">${r.worst_trade}%</span></td>
+      <td class="px-4 py-2.5 text-center text-xs text-gray-500">${r.run_at?r.run_at.slice(0,10):'—'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="8" class="text-center py-6 text-gray-500">No symbols passed all thresholds yet</td></tr>';
+
+  if (failed.length) {
+    failedList.innerHTML = failed.map(r=>`<span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:11px;background:#1a1a24;color:#6b7280;border:1px solid #252535" title="${r.fail_reason||''}">
+      ${r.symbol} <span style="color:#f87171;margin-left:4px">${r.win_rate}%wr</span></span>`).join('');
+    failedSec.classList.remove('hidden');
+  }
+  sec.classList.remove('hidden');
 }
 
 async function pushTopPicks(n=5) {
@@ -1225,34 +1404,57 @@ async function fetchPlayLiveData() {
   const btn = document.getElementById('np-fetch-btn');
   const bar = document.getElementById('np-live-bar');
   const status = document.getElementById('np-live-status');
-  btn.textContent = '…';
-  btn.disabled = true;
-  bar.classList.remove('hidden');
+  btn.textContent = '…'; btn.disabled = true;
+  bar.style.display = 'block'; bar.classList.remove('hidden');
   status.textContent = 'Fetching…';
   try {
-    const s = await api('/api/signals/' + sym);
+    const [s, bt] = await Promise.all([
+      api('/api/signals/' + sym),
+      api('/api/scanner/backtest/' + sym).catch(()=>({tested:false})),
+    ]);
     if (s.error) { status.textContent = '⚠ ' + s.error; btn.textContent = '↻'; btn.disabled = false; return; }
 
-    // Populate live bar
+    // Price
     document.getElementById('np-live-price').textContent = '$' + s.price.toFixed(2);
+
+    // RSI
     const rsiEl = document.getElementById('np-live-rsi');
     rsiEl.textContent = s.rsi.toFixed(1);
     rsiEl.className = 'font-semibold ' + (s.rsi > 70 ? 'text-red-400' : s.rsi < 30 ? 'text-green-400' : 'text-yellow-400');
-    const biasEl = document.getElementById('np-live-bias');
-    biasEl.textContent = s.overall;
-    biasEl.className = 'font-semibold ' + (s.overall === 'BULLISH' ? 'text-green-400' : s.overall === 'BEARISH' ? 'text-red-400' : 'text-yellow-400');
-    status.textContent = '✓ auto-filled';
 
-    // Auto-fill price fields only if they're empty
-    if (!document.getElementById('np-entry').value) document.getElementById('np-entry').value = s.suggested_entry.toFixed(2);
-    if (!document.getElementById('np-stop').value)  document.getElementById('np-stop').value  = s.suggested_stop.toFixed(2);
-    if (!document.getElementById('np-tp').value)    document.getElementById('np-tp').value    = s.suggested_target.toFixed(2);
+    // BSH
+    const bsh = s.bsh || (s.buy_pct>=60?'BUY':s.buy_pct<=40?'SELL':'HOLD');
+    const biasEl = document.getElementById('np-live-bias');
+    biasEl.textContent = bsh + ' ' + (s.buy_pct||50) + '/100';
+    biasEl.className = 'font-semibold ' + (bsh==='BUY'?'text-green-400':bsh==='SELL'?'text-red-400':'text-yellow-400');
+
+    // Stop method label
+    const stopMethod = document.getElementById('np-stop-method');
+    if (stopMethod) stopMethod.textContent = s.stop_method || 'ATR×1.5';
+
+    // Backtest badge
+    const btEl = document.getElementById('np-live-bt');
+    if (btEl) {
+      if (!bt.tested) {
+        btEl.innerHTML = '<span style="color:#6b7280;font-size:11px">No backtest — <a href="#" onclick="event.preventDefault();switchTab(\'scanner\')" style="color:#818cf8">run qualification</a></span>';
+      } else if (bt.qualified) {
+        btEl.innerHTML = `<span style="display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:99px;background:#14532d40;color:#4ade80;border:1px solid #166534;font-weight:700">READY FOR LIVE TRADING · ${bt.win_rate}% win · +${bt.avg_return}% avg</span>`;
+      } else {
+        btEl.innerHTML = `<span style="display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:99px;background:#7f1d1d40;color:#f87171;border:1px solid #991b1b;font-weight:700">NOT QUALIFIED · ${bt.fail_reason||'see scanner'}</span>`;
+      }
+    }
+
+    status.textContent = '✓ ATR stop/target set';
+
+    // Always apply ATR-based stop/target (override)
+    document.getElementById('np-entry').value = s.suggested_entry.toFixed(2);
+    document.getElementById('np-stop').value  = s.suggested_stop.toFixed(2);
+    document.getElementById('np-tp').value    = s.suggested_target.toFixed(2);
     updateRR();
   } catch(e) {
     status.textContent = '⚠ fetch failed';
   }
-  btn.textContent = '↻';
-  btn.disabled = false;
+  btn.textContent = '↻'; btn.disabled = false;
 }
 
 function prefillPlay(sym, price, stop, target) {

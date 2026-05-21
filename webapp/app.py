@@ -100,6 +100,23 @@ def init_db():
                 n_trades INTEGER,
                 created_at TEXT DEFAULT (datetime('now'))
             );
+            CREATE TABLE IF NOT EXISTS symbol_backtests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL,
+                period_days INTEGER DEFAULT 90,
+                total_trades INTEGER DEFAULT 0,
+                winning_trades INTEGER DEFAULT 0,
+                win_rate REAL DEFAULT 0,
+                avg_return REAL DEFAULT 0,
+                best_trade REAL DEFAULT 0,
+                worst_trade REAL DEFAULT 0,
+                profit_factor REAL DEFAULT 0,
+                max_drawdown REAL DEFAULT 0,
+                qualified INTEGER DEFAULT 0,
+                fail_reason TEXT,
+                run_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_sbt_symbol ON symbol_backtests(symbol, run_at DESC);
         """)
         # Seed watchlist
         count = conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0]
@@ -342,6 +359,16 @@ def get_signals(symbol: str) -> Dict:
         overall = "BULLISH" if buy_pct >= 60 else "BEARISH" if buy_pct <= 40 else "NEUTRAL"
         bsh = "BUY" if buy_pct >= 60 else "SELL" if buy_pct <= 40 else "HOLD"
 
+        # ATR-based stop/target (replaces flat %)
+        tr = pd.concat([
+            hist["high"] - hist["low"],
+            (hist["high"] - close.shift()).abs(),
+            (hist["low"] - close.shift()).abs(),
+        ], axis=1).max(axis=1)
+        atr = float(tr.rolling(14).mean().iloc[-1])
+        stop_dist = max(atr * 1.5, price * 0.02)   # min 2%
+        target_dist = stop_dist * 2.5               # 2.5:1 R:R
+
         result = {
             "symbol": symbol,
             "price": round(price, 2),
@@ -354,14 +381,16 @@ def get_signals(symbol: str) -> Dict:
             "bb_lower": round(bb_lower, 2),
             "bb_pct": round(bb_pct, 1),
             "vol_ratio": round(vol_ratio, 2),
+            "atr": round(atr, 3),
             "score": score,
             "buy_pct": buy_pct,
             "overall": overall,
             "bsh": bsh,
             "signals": signals,
             "suggested_entry": round(price, 2),
-            "suggested_stop": round(price * 0.97, 2),
-            "suggested_target": round(price * 1.06, 2),
+            "suggested_stop": round(price - stop_dist, 2),
+            "suggested_target": round(price + target_dist, 2),
+            "stop_method": f"ATR×1.5 ({atr:.2f})",
         }
         _cache[key] = (result, now)
         return result
@@ -398,7 +427,8 @@ _bt: Dict[str, Any] = {"running": False, "progress": 0, "result": None, "error":
 
 # ── Scanner state ───────────────────────────────────────────────────
 _scan: Dict[str, Any] = {"running": False, "progress": 0, "result": None, "error": None}
-_sim: Dict[str, Any] = {"running": False, "progress": 0, "result": None, "error": None}
+_sim:  Dict[str, Any] = {"running": False, "progress": 0, "result": None, "error": None}
+_qbt:  Dict[str, Any] = {"running": False, "progress": 0, "completed": 0, "total": 0, "result": None, "error": None}
 
 
 def _run_backtest(symbols: List[str], start: str, end: str):
@@ -845,6 +875,41 @@ def scanner_sim_status():
     return _sim
 
 
+@app.post("/api/scanner/backtest/start")
+def scanner_bt_start(body: dict = {}):
+    global _qbt
+    if _qbt["running"]:
+        raise HTTPException(409, "Backtest run already in progress")
+    symbols = body.get("symbols") if body else None
+    if not symbols:
+        from data.sector_symbols import ALL_HANDPICK_SYMBOLS
+        symbols = ALL_HANDPICK_SYMBOLS
+    threading.Thread(target=_run_qual_backtests, args=(symbols,), daemon=True).start()
+    return {"started": True, "total": len(symbols)}
+
+
+@app.get("/api/scanner/backtest/status")
+def scanner_bt_status():
+    return _qbt
+
+
+@app.get("/api/scanner/backtest/results")
+def scanner_bt_results():
+    return _latest_bt_results()
+
+
+@app.get("/api/scanner/backtest/{symbol}")
+def scanner_bt_symbol(symbol: str):
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM symbol_backtests WHERE symbol=? ORDER BY run_at DESC LIMIT 1",
+            (symbol.upper(),),
+        ).fetchone()
+    if not row:
+        return {"symbol": symbol.upper(), "tested": False}
+    return {**dict(row), "tested": True}
+
+
 @app.post("/api/scanner/push")
 def scanner_push(body: dict):
     symbols = body.get("symbols", [])
@@ -858,6 +923,56 @@ def scanner_push(body: dict):
         except Exception:
             pass
     return {"added": added}
+
+
+def _run_qual_backtests(symbols: List[str]) -> None:
+    """Run per-symbol 90-day qualification backtests and persist results."""
+    global _qbt
+    _qbt = {"running": True, "progress": 0, "completed": 0, "total": len(symbols), "result": None, "error": None}
+    try:
+        from core.opportunity_scanner import backtest_symbol
+        lock = threading.Lock()
+        completed = [0]
+
+        def _worker(sym: str) -> None:
+            r = backtest_symbol(_load_bars, sym)
+            if r:
+                with get_db() as conn:
+                    conn.execute(
+                        """INSERT INTO symbol_backtests
+                           (symbol,period_days,total_trades,winning_trades,win_rate,avg_return,
+                            best_trade,worst_trade,profit_factor,max_drawdown,qualified,fail_reason)
+                           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (r["symbol"], r["period_days"], r["total_trades"], r["winning_trades"],
+                         r["win_rate"], r["avg_return"], r["best_trade"], r["worst_trade"],
+                         r["profit_factor"], r["max_drawdown"], 1 if r["qualified"] else 0,
+                         r.get("fail_reason")),
+                    )
+            with lock:
+                completed[0] += 1
+                pct = int(completed[0] / len(symbols) * 100)
+                _qbt["completed"] = completed[0]
+                _qbt["progress"] = pct
+
+        with ThreadPoolExecutor(max_workers=8) as exe:
+            list(exe.map(_worker, symbols))
+
+        _qbt.update({"running": False, "progress": 100, "result": _latest_bt_results()})
+    except Exception as e:
+        _qbt.update({"running": False, "error": str(e)})
+
+
+def _latest_bt_results() -> List[Dict]:
+    """Return most-recent backtest per symbol, sorted by win_rate desc."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT b.* FROM symbol_backtests b
+            INNER JOIN (
+                SELECT symbol, MAX(run_at) as mr FROM symbol_backtests GROUP BY symbol
+            ) l ON b.symbol = l.symbol AND b.run_at = l.mr
+            ORDER BY b.qualified DESC, b.win_rate DESC
+        """).fetchall()
+    return [dict(r) for r in rows]
 
 
 def _run_scan(symbols: List[str]) -> None:
