@@ -70,9 +70,8 @@
     <div style="font-size:52px;margin-bottom:20px">🖨️</div>
     <h2 style="font-size:30px;font-weight:800;color:#fff;margin-bottom:6px;letter-spacing:-0.5px">Ready to print?</h2>
     <p style="color:#6b7280;font-size:13px;margin-bottom:32px">Regime Trader is loading your portfolio</p>
-    <iframe id="yt-audio" width="1" height="1" style="position:absolute;opacity:0;pointer-events:none"
-      src="https://www.youtube.com/embed/998gtPrpN_Y?autoplay=1&start=16&enablejsapi=1"
-      allow="autoplay; encrypted-media" frameborder="0"></iframe>
+    <!-- iframe injected on OK click to guarantee autoplay after user gesture -->
+    <div id="yt-container" style="position:absolute;opacity:0;pointer-events:none;width:1px;height:1px"></div>
     <button onclick="closeStartup()" style="background:#6366f1;color:#fff;border:none;border-radius:10px;padding:14px 48px;font-size:16px;font-weight:700;cursor:pointer;letter-spacing:0.3px;transition:opacity 0.15s" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">OK</button>
   </div>
 </div>
@@ -1829,16 +1828,14 @@ function refreshAll() {
   Promise.all([p, loadPortfolio()]).finally(done);
 }
 
-// Startup modal — auto-kill audio after 15s
-const _startupKill = setTimeout(() => {
-  const f = document.getElementById('yt-audio');
-  if (f) f.src = '';
-}, 15000);
-
 function closeStartup() {
-  clearTimeout(_startupKill);
-  const f = document.getElementById('yt-audio');
-  if (f) f.src = '';
+  // Inject iframe HERE — after user click guarantees browser allows autoplay
+  const container = document.getElementById('yt-container');
+  if (container) {
+    container.innerHTML = '<iframe width="1" height="1" src="https://www.youtube.com/embed/998gtPrpN_Y?autoplay=1&start=16&enablejsapi=1" allow="autoplay; encrypted-media" frameborder="0"></iframe>';
+    // Auto-stop after 15 seconds
+    setTimeout(() => { container.innerHTML = ''; }, 15000);
+  }
   const modal = document.getElementById('startup-modal');
   modal.style.transition = 'opacity 0.3s';
   modal.style.opacity = '0';
