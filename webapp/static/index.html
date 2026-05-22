@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Regime Trader</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<!-- Spotify autoplay handled dynamically in closeStartup() -->
+<script src="https://www.youtube.com/iframe_api"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
   tailwind.config = {
@@ -71,6 +71,9 @@
 </head>
 <body class="h-full text-gray-900 antialiased">
 
+<!-- Hidden YouTube audio player -->
+<div id="yt-player" style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;bottom:0;right:0"></div>
+
 <!-- Explosion canvas -->
 <canvas id="explosion-canvas" style="position:fixed;inset:0;z-index:10001;pointer-events:none;display:none"></canvas>
 
@@ -81,19 +84,11 @@
     <!-- Yeat Shrine -->
     <div style="margin-bottom:28px">
       <div style="font-size:10px;letter-spacing:4px;color:#b45309;text-transform:uppercase;margin-bottom:14px;font-weight:700">✦ &nbsp; Y E A T &nbsp; S H R I N E &nbsp; ✦</div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
-        <div style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000">
-          <img src="https://upload.wikimedia.org/wikipedia/en/thumb/1/17/Yeat_-_2093_%28Official_Album_Cover%29.jpg/300px-Yeat_-_2093_%28Official_Album_Cover%29.jpg" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<div style=\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:32px\'>🔥</div>'" />
-        </div>
-        <div style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000">
-          <img src="https://upload.wikimedia.org/wikipedia/en/thumb/c/c1/Yeat_-_Lif%C3%AB.jpg/300px-Yeat_-_Lif%C3%AB.jpg" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<div style=\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:32px\'>👑</div>'" />
-        </div>
-        <div style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000">
-          <img src="https://upload.wikimedia.org/wikipedia/en/thumb/b/b4/Yeat_-_Up_2_M%C3%AB_%28album_cover%29.jpg/300px-Yeat_-_Up_2_M%C3%AB_%28album_cover%29.jpg" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<div style=\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:32px\'>💰</div>'" />
-        </div>
-        <div style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000">
-          <img src="https://upload.wikimedia.org/wikipedia/en/thumb/3/3d/Yeat_-_After_Lyfe.png/300px-Yeat_-_After_Lyfe.png" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<div style=\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:32px\'>⚡</div>'" />
-        </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px" id="yeat-shrine-grid">
+        <div class="yeat-frame" style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000;display:flex;align-items:center;justify-content:center;font-size:32px">🔥</div>
+        <div class="yeat-frame" style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000;display:flex;align-items:center;justify-content:center;font-size:32px">👑</div>
+        <div class="yeat-frame" style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000;display:flex;align-items:center;justify-content:center;font-size:32px">💰</div>
+        <div class="yeat-frame" style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000;display:flex;align-items:center;justify-content:center;font-size:32px">⚡</div>
       </div>
       <div style="font-size:36px;font-weight:900;color:#fbbf24;letter-spacing:6px;text-shadow:0 0 30px rgba(251,191,36,0.8)">YEAT</div>
       <div style="font-size:11px;color:#92400e;margin-top:4px;letter-spacing:2px">GOAT · TWIZZY RICH · 4L</div>
@@ -1994,32 +1989,93 @@ function runExplosion() {
   requestAnimationFrame(draw);
 }
 
+// ── YouTube audio ─────────────────────────────────────────────────────
+var _ytPlayer = null, _ytReady = false, _ytDuration = 240;
+
+function onYouTubeIframeAPIReady() {
+  _ytPlayer = new YT.Player('yt-player', {
+    videoId: 'bjRwrSbcIqY',
+    playerVars: { autoplay: 0, controls: 0, disablekb: 1, fs: 0, rel: 0, showinfo: 0 },
+    events: {
+      onReady: function(e) {
+        _ytReady = true;
+        const d = e.target.getDuration();
+        if(d > 0) _ytDuration = d;
+      }
+    }
+  });
+}
+
+function fadeVol(player, from, to, ms, cb) {
+  const steps = 40, stepMs = ms / steps, step = (to - from) / steps;
+  let v = from, n = 0;
+  const iv = setInterval(() => {
+    v += step; n++;
+    try { player.setVolume(Math.round(Math.max(0, Math.min(100, v)))); } catch(e) {}
+    if(n >= steps) { clearInterval(iv); if(cb) cb(); }
+  }, stepMs);
+}
+
 function closeStartup() {
-  // Explosion
   runExplosion();
 
-  // Dismiss modal after brief flash
   const modal = document.getElementById('startup-modal');
-  setTimeout(()=>{
-    modal.style.transition='opacity 0.4s';
-    modal.style.opacity='0';
-    setTimeout(()=>modal.remove(), 400);
+  setTimeout(() => {
+    modal.style.transition = 'opacity 0.4s';
+    modal.style.opacity = '0';
+    setTimeout(() => modal.remove(), 400);
   }, 200);
 
-  // Spotify — pick a random track offset (0-40) to shuffle feel
-  const randomOffset = Math.floor(Math.random()*41);
-  const spotifyUrl = `https://open.spotify.com/embed/playlist/1Lnz9UPLZCRP0WHcZCf0xw?utm_source=generator&autoplay=1&start_track=${randomOffset}`;
-  const iframe = document.createElement('iframe');
-  iframe.src = spotifyUrl;
-  iframe.style.cssText = 'position:fixed;bottom:0;right:0;width:1px;height:1px;opacity:0;pointer-events:none;';
-  iframe.allow = 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture';
-  iframe.frameBorder = '0';
-  document.body.appendChild(iframe);
-  setTimeout(()=>{ try{iframe.remove();}catch(e){} }, 20000);
+  function _play() {
+    const safeMax = Math.max(0, _ytDuration - 25);
+    const startAt = Math.floor(Math.random() * safeMax);
+    _ytPlayer.setVolume(0);
+    _ytPlayer.seekTo(startAt, true);
+    _ytPlayer.playVideo();
+    fadeVol(_ytPlayer, 0, 100, 2000);               // fade in 2s
+    setTimeout(() => {
+      fadeVol(_ytPlayer, 100, 0, 2000, () => {       // fade out 2s
+        try { _ytPlayer.stopVideo(); } catch(e) {}
+      });
+    }, 18000);
+  }
+
+  if(_ytReady) {
+    _play();
+  } else {
+    let tries = 0;
+    const iv = setInterval(() => {
+      if(_ytReady) { clearInterval(iv); _play(); }
+      else if(++tries > 40) clearInterval(iv);
+    }, 150);
+  }
+}
+
+// ── Yeat shrine images (iTunes API) ───────────────────────────────────
+async function loadYeatImages() {
+  try {
+    const res = await fetch('https://itunes.apple.com/search?term=yeat&entity=album&limit=20&country=us');
+    const data = await res.json();
+    const frames = document.querySelectorAll('.yeat-frame');
+    let filled = 0;
+    for(const result of data.results) {
+      if(filled >= frames.length) break;
+      if(!result.artworkUrl100) continue;
+      const src = result.artworkUrl100.replace('100x100bb', '600x600bb');
+      const frame = frames[filled];
+      const img = document.createElement('img');
+      img.style.cssText = 'width:100%;height:100%;object-fit:cover';
+      img.src = src;
+      img.onerror = () => { /* keep emoji fallback */ };
+      img.onload = () => { frame.innerHTML = ''; frame.appendChild(img); };
+      filled++;
+    }
+  } catch(e) { /* keep emoji fallbacks */ }
 }
 
 // Boot
 loadPortfolio();
+loadYeatImages();
 switchTab('watchlist');
 setInterval(loadPortfolio, 30000);
 </script>
