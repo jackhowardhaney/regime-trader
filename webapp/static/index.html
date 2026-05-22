@@ -97,7 +97,7 @@
     <!-- Tabs -->
     <nav class="flex gap-1 flex-1">
       <button onclick="switchTab('watchlist')" id="tab-watchlist" class="tab-active px-4 py-4 text-sm font-medium transition-all">Watchlist</button>
-      <button onclick="switchTab('scanner')" id="tab-scanner" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">&#x1F4E1; Hand Picks</button>
+      <button onclick="switchTab('scanner')" id="tab-scanner" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">Hand Picks</button>
       <button onclick="switchTab('plays')" id="tab-plays" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">Plays</button>
       <button onclick="switchTab('backtest')" id="tab-backtest" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">Backtesting</button>
       <button onclick="switchTab('history')" id="tab-history" class="tab-inactive px-4 py-4 text-sm font-medium transition-all">History</button>
@@ -594,6 +594,10 @@
 </div>
 
 </main>
+
+<div style="position:fixed;bottom:12px;right:16px;font-size:11px;color:#9ca3af;text-align:right;pointer-events:none;z-index:100">
+  Built by Jack "Twan" Haney &nbsp;·&nbsp; Not financial advice
+</div>
 
 <!-- ══════════════════════════════════════════════════
      MODAL: Add Symbol
