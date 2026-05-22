@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Regime Trader</title>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://www.youtube.com/iframe_api"></script>
+<!-- Spotify autoplay handled dynamically in closeStartup() -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
   tailwind.config = {
@@ -71,16 +71,41 @@
 </head>
 <body class="h-full text-gray-900 antialiased">
 
-<!-- YouTube player target (lives outside modal so it persists) -->
-<div id="yt-player" style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;bottom:0;right:0"></div>
+<!-- Explosion canvas -->
+<canvas id="explosion-canvas" style="position:fixed;inset:0;z-index:10001;pointer-events:none;display:none"></canvas>
 
 <!-- ── Startup Modal ── -->
-<div id="startup-modal" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.92);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)">
-  <div style="background:#111118;border:1px solid #2d2d44;border-radius:20px;padding:52px 48px;text-align:center;max-width:380px;box-shadow:0 0 60px rgba(99,102,241,0.15)">
-    <div style="font-size:52px;margin-bottom:20px">🖨️</div>
-    <h2 style="font-size:30px;font-weight:800;color:#fff;margin-bottom:6px;letter-spacing:-0.5px">Ready to print?</h2>
-    <p style="color:#6b7280;font-size:13px;margin-bottom:32px">Regime Trader is loading your portfolio</p>
-    <button onclick="closeStartup()" style="background:#6366f1;color:#fff;border:none;border-radius:10px;padding:14px 48px;font-size:16px;font-weight:700;cursor:pointer;letter-spacing:0.3px;transition:opacity 0.15s" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">OK</button>
+<div id="startup-modal" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.95);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)">
+  <div style="background:linear-gradient(160deg,#0a0800,#1a1200,#0a0800);border:2px solid #92400e;border-radius:24px;padding:36px 40px;text-align:center;max-width:660px;width:95vw;box-shadow:0 0 100px rgba(251,191,36,0.25),0 0 40px rgba(251,191,36,0.1)">
+
+    <!-- Yeat Shrine -->
+    <div style="margin-bottom:28px">
+      <div style="font-size:10px;letter-spacing:4px;color:#b45309;text-transform:uppercase;margin-bottom:14px;font-weight:700">✦ &nbsp; Y E A T &nbsp; S H R I N E &nbsp; ✦</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px">
+        <div style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000">
+          <img src="https://upload.wikimedia.org/wikipedia/en/thumb/1/17/Yeat_-_2093_%28Official_Album_Cover%29.jpg/300px-Yeat_-_2093_%28Official_Album_Cover%29.jpg" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<div style=\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:32px\'>🔥</div>'" />
+        </div>
+        <div style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000">
+          <img src="https://upload.wikimedia.org/wikipedia/en/thumb/c/c1/Yeat_-_Lif%C3%AB.jpg/300px-Yeat_-_Lif%C3%AB.jpg" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<div style=\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:32px\'>👑</div>'" />
+        </div>
+        <div style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000">
+          <img src="https://upload.wikimedia.org/wikipedia/en/thumb/b/b4/Yeat_-_Up_2_M%C3%AB_%28album_cover%29.jpg/300px-Yeat_-_Up_2_M%C3%AB_%28album_cover%29.jpg" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<div style=\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:32px\'>💰</div>'" />
+        </div>
+        <div style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000">
+          <img src="https://upload.wikimedia.org/wikipedia/en/thumb/3/3d/Yeat_-_After_Lyfe.png/300px-Yeat_-_After_Lyfe.png" style="width:100%;height:100%;object-fit:cover" onerror="this.parentElement.innerHTML='<div style=\'width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:32px\'>⚡</div>'" />
+        </div>
+      </div>
+      <div style="font-size:36px;font-weight:900;color:#fbbf24;letter-spacing:6px;text-shadow:0 0 30px rgba(251,191,36,0.8)">YEAT</div>
+      <div style="font-size:11px;color:#92400e;margin-top:4px;letter-spacing:2px">GOAT · TWIZZY RICH · 4L</div>
+    </div>
+
+    <div style="border-top:1px solid #78350f;padding-top:24px">
+      <div style="font-size:36px;margin-bottom:10px">🖨️</div>
+      <h2 style="font-size:26px;font-weight:800;color:#fbbf24;margin-bottom:6px;letter-spacing:-0.5px">Ready to print?</h2>
+      <p style="color:#78350f;font-size:13px;margin-bottom:24px">Regime Trader is loading your portfolio</p>
+      <button onclick="closeStartup()" style="background:linear-gradient(135deg,#b45309,#d97706,#b45309);color:#fff;border:none;border-radius:10px;padding:14px 56px;font-size:16px;font-weight:800;cursor:pointer;letter-spacing:1px;box-shadow:0 0 20px rgba(251,191,36,0.4);transition:all 0.15s" onmouseover="this.style.boxShadow='0 0 40px rgba(251,191,36,0.7)'" onmouseout="this.style.boxShadow='0 0 20px rgba(251,191,36,0.4)'">OK</button>
+    </div>
+
   </div>
 </div>
 
@@ -358,6 +383,22 @@
   <div class="flex gap-4 mb-4 border-b border-gray-200">
     <button onclick="setPlaysTab('active')" id="plays-tab-active" class="tab-active pb-3 text-sm font-medium">Active</button>
     <button onclick="setPlaysTab('closed')" id="plays-tab-closed" class="tab-inactive pb-3 text-sm font-medium">Closed</button>
+  </div>
+
+  <!-- Account summary -->
+  <div class="grid grid-cols-3 gap-4 mb-5" id="plays-summary">
+    <div class="card p-4">
+      <p class="text-xs text-gray-500 mb-1">Total Account Value</p>
+      <p class="text-2xl font-bold text-gray-900" id="ps-equity">—</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-gray-500 mb-1">Day P&amp;L</p>
+      <p class="text-2xl font-bold" id="ps-day-pnl">—</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-gray-500 mb-1">Overall Unrealized P&amp;L</p>
+      <p class="text-2xl font-bold" id="ps-total-pnl">—</p>
+    </div>
   </div>
 
   <!-- Active plays brokerage table -->
@@ -1376,9 +1417,20 @@ function setPlaysTab(t) {
 
 async function loadPlays() {
   try {
-    const plays = await api('/api/plays');
+    const [plays, port] = await Promise.all([api('/api/plays'), api('/api/portfolio')]);
     renderActivePlays(plays.filter(p=>p.status==='ACTIVE'||p.status==='PENDING'));
     renderClosedPlays(plays.filter(p=>p.status==='CLOSED'));
+    if(port && port.connected) {
+      document.getElementById('ps-equity').textContent = fmt$(port.equity);
+      const dayPnl = port.day_pl ?? 0;
+      const dayEl = document.getElementById('ps-day-pnl');
+      dayEl.textContent = (dayPnl>=0?'+':'') + fmt$(dayPnl);
+      dayEl.style.color = dayPnl>=0 ? '#16a34a' : '#dc2626';
+      const totPnl = port.unrealized_pnl ?? 0;
+      const totEl = document.getElementById('ps-total-pnl');
+      totEl.textContent = (totPnl>=0?'+':'') + fmt$(totPnl);
+      totEl.style.color = totPnl>=0 ? '#16a34a' : '#dc2626';
+    }
   } catch(e) {
     document.getElementById('plays-active-body').innerHTML = `<tr><td colspan="9" class="text-center py-6 text-red-400">${e.message}</td></tr>`;
   }
@@ -1896,44 +1948,74 @@ function refreshAll() {
   Promise.all([p, loadPortfolio()]).finally(done);
 }
 
-var _ytPlayer = null;
-// Called automatically by YouTube IFrame API when ready
-function onYouTubeIframeAPIReady() {
-  _ytPlayer = new YT.Player('yt-player', {
-    videoId: '998gtPrpN_Y',
-    playerVars: { autoplay: 0, start: 16, controls: 0, disablekb: 1, fs: 0, rel: 0 },
-    events: {
-      onReady: function(e) { /* player ready, waiting for OK click */ }
-    }
-  });
+function runExplosion() {
+  const canvas = document.getElementById('explosion-canvas');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  canvas.style.display = 'block';
+  const ctx = canvas.getContext('2d');
+  const particles = [];
+  const colors = ['#fbbf24','#f59e0b','#d97706','#ef4444','#f97316','#fde68a','#fff'];
+  for(let i=0;i<200;i++){
+    const angle = Math.random()*Math.PI*2;
+    const speed = 4+Math.random()*14;
+    particles.push({
+      x: window.innerWidth/2 + (Math.random()-0.5)*200,
+      y: window.innerHeight/2 + (Math.random()-0.5)*200,
+      vx: Math.cos(angle)*speed,
+      vy: Math.sin(angle)*speed - Math.random()*6,
+      r: 3+Math.random()*6,
+      color: colors[Math.floor(Math.random()*colors.length)],
+      alpha: 1,
+      gravity: 0.25+Math.random()*0.2
+    });
+  }
+  let frame=0;
+  function draw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    particles.forEach(p=>{
+      p.x+=p.vx; p.y+=p.vy; p.vy+=p.gravity;
+      p.vx*=0.98; p.alpha-=0.018;
+      if(p.alpha<=0)return;
+      ctx.save();
+      ctx.globalAlpha=p.alpha;
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,p.r,0,Math.PI*2);
+      ctx.fillStyle=p.color;
+      ctx.shadowColor=p.color;
+      ctx.shadowBlur=10;
+      ctx.fill();
+      ctx.restore();
+    });
+    frame++;
+    if(frame<90) requestAnimationFrame(draw);
+    else canvas.style.display='none';
+  }
+  requestAnimationFrame(draw);
 }
 
 function closeStartup() {
-  // Dismiss modal
+  // Explosion
+  runExplosion();
+
+  // Dismiss modal after brief flash
   const modal = document.getElementById('startup-modal');
-  modal.style.transition = 'opacity 0.3s';
-  modal.style.opacity = '0';
-  setTimeout(() => modal.remove(), 300);
+  setTimeout(()=>{
+    modal.style.transition='opacity 0.4s';
+    modal.style.opacity='0';
+    setTimeout(()=>modal.remove(), 400);
+  }, 200);
 
-  // Play at max volume from 0:16, stop after 15s
-  function _play() {
-    _ytPlayer.setVolume(100);
-    _ytPlayer.seekTo(16, true);
-    _ytPlayer.playVideo();
-    setTimeout(() => { try { _ytPlayer.stopVideo(); } catch(e) {} }, 15000);
-  }
-
-  if (_ytPlayer && typeof _ytPlayer.playVideo === 'function') {
-    _play();
-  } else {
-    // API not loaded yet — poll briefly
-    let tries = 0;
-    const iv = setInterval(() => {
-      if (_ytPlayer && typeof _ytPlayer.playVideo === 'function') {
-        clearInterval(iv); _play();
-      } else if (++tries > 20) clearInterval(iv);
-    }, 150);
-  }
+  // Spotify — pick a random track offset (0-40) to shuffle feel
+  const randomOffset = Math.floor(Math.random()*41);
+  const spotifyUrl = `https://open.spotify.com/embed/playlist/1Lnz9UPLZCRP0WHcZCf0xw?utm_source=generator&autoplay=1&start_track=${randomOffset}`;
+  const iframe = document.createElement('iframe');
+  iframe.src = spotifyUrl;
+  iframe.style.cssText = 'position:fixed;bottom:0;right:0;width:1px;height:1px;opacity:0;pointer-events:none;';
+  iframe.allow = 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture';
+  iframe.frameBorder = '0';
+  document.body.appendChild(iframe);
+  setTimeout(()=>{ try{iframe.remove();}catch(e){} }, 20000);
 }
 
 // Boot
