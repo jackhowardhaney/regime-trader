@@ -384,7 +384,7 @@
   <div class="flex items-center justify-between mb-4">
     <div>
       <h1 class="text-xl font-semibold text-white">Backtesting</h1>
-      <p class="text-sm text-gray-500 mt-0.5">Walk-forward backtest using the HMM regime engine.</p>
+      <p class="text-sm text-gray-500 mt-0.5">Swing signal backtest using live Alpaca data.</p>
     </div>
   </div>
 
@@ -398,12 +398,16 @@
           <input id="bt-symbols" type="text" class="input" value="SPY,QQQ" />
         </div>
         <div>
-          <label class="block text-xs text-gray-500 mb-1">Start Date</label>
-          <input id="bt-start" type="date" class="input" value="2020-01-01" />
-        </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">End Date</label>
-          <input id="bt-end" type="date" class="input" value="2024-12-31" />
+          <label class="block text-xs text-gray-500 mb-2">Lookback Period</label>
+          <input id="bt-period-slider" type="range" min="0" max="60" value="12"
+            class="w-full h-2 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+            oninput="onBtSliderChange(this.value)" />
+          <div class="flex justify-between text-xs text-gray-500 mt-1">
+            <span>10 days</span>
+            <span id="bt-period-label" class="text-white font-semibold">1 year</span>
+            <span>5 years</span>
+          </div>
+          <div class="mt-2 text-xs text-gray-500 text-center" id="bt-period-dates"></div>
         </div>
         <button onclick="runBacktest()" id="bt-run-btn" class="btn btn-primary w-full justify-center">
           Run Backtest
@@ -755,6 +759,7 @@ function switchTab(t) {
     loadPlays();
     refreshTimer = setInterval(loadPlays, 15000);
   } else if(t==='backtest') {
+    onBtSliderChange(document.getElementById('bt-period-slider').value);
     loadBtLatest();
     loadBtHistory();
   } else if(t==='history') {
@@ -1586,12 +1591,40 @@ async function loadBtHistory() {
   } catch(e) {}
 }
 
+function btSliderDays(val) {
+  return val == 0 ? 10 : val * 30;
+}
+
+function btSliderLabel(val) {
+  val = parseInt(val);
+  if (val === 0) return '10 days';
+  if (val < 12) return val + ' month' + (val > 1 ? 's' : '');
+  const years = Math.floor(val / 12);
+  const months = val % 12;
+  if (months === 0) return years + ' year' + (years > 1 ? 's' : '');
+  return years + 'y ' + months + 'm';
+}
+
+function btSliderDates(val) {
+  const days = btSliderDays(val);
+  const end = new Date();
+  const start = new Date(end - days * 86400000);
+  const fmt = d => d.toISOString().split('T')[0];
+  return { start: fmt(start), end: fmt(end) };
+}
+
+function onBtSliderChange(val) {
+  document.getElementById('bt-period-label').textContent = btSliderLabel(val);
+  const { start, end } = btSliderDates(val);
+  document.getElementById('bt-period-dates').textContent = start + ' → ' + end;
+}
+
 async function runBacktest() {
   const symsRaw = document.getElementById('bt-symbols').value;
   const symbols = symsRaw.split(/[,\s]+/).map(s=>s.trim().toUpperCase()).filter(Boolean);
-  const start = document.getElementById('bt-start').value;
-  const end   = document.getElementById('bt-end').value;
-  if(!symbols.length || !start || !end) { alert('Fill in symbols and dates.'); return; }
+  const sliderVal = document.getElementById('bt-period-slider').value;
+  const { start, end } = btSliderDates(sliderVal);
+  if(!symbols.length) { alert('Enter at least one symbol.'); return; }
 
   document.getElementById('bt-run-btn').disabled = true;
   document.getElementById('bt-run-btn').textContent = 'Running…';
