@@ -434,83 +434,156 @@ _qbt:  Dict[str, Any] = {"running": False, "progress": 0, "completed": 0, "total
 
 
 def _run_backtest(symbols: List[str], start: str, end: str):
+    """
+    Fast in-process signal-based backtest. Works with as few as 10 trading days.
+    Uses Alpaca bars via _load_bars; no subprocess, no HMM training required.
+    Entry: any signal fires → enter at next open.
+    Exit: +5% target / -3% stop / 10-bar hold.
+    Portfolio: 10% allocation per trade, equal-weight across symbols.
+    """
     global _bt
     _bt = {"running": True, "progress": 5, "result": None, "error": None}
     try:
-        cmd = [
-            sys.executable, "-W", "ignore",
-            str(ROOT / "main.py"), "backtest",
-            "--symbols", *symbols,
-            "--start", start, "--end", end,
-            "--compare", "--output-dir", str(RESULTS_DIR),
-        ]
-        _bt["progress"] = 15
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=str(ROOT), timeout=360)
-        _bt["progress"] = 85
-        if r.returncode != 0:
-            _bt.update({"running": False, "error": (r.stderr or r.stdout)[-2000:]})
+        from core.opportunity_scanner import score_symbol
+
+        start_dt = pd.Timestamp(start)
+        end_dt   = pd.Timestamp(end)
+        req_days  = max(10, (end_dt - start_dt).days)
+        fetch_days = req_days + 150  # extra warmup for indicators
+
+        _bt["progress"] = 10
+
+        # ── 1. Pre-fetch all bars (Alpaca first, yfinance fallback) ──────
+        bars_full: Dict[str, pd.DataFrame] = {}
+        for i, sym in enumerate(symbols):
+            _bt["progress"] = 10 + int(25 * i / max(len(symbols), 1))
+            df = _load_bars(sym, days=fetch_days)
+            if df is not None and len(df) >= 10:
+                bars_full[sym] = df
+
+        if not bars_full:
+            _bt.update({"running": False,
+                        "error": f"No price data returned for: {', '.join(symbols)}"})
             return
 
-        ec_f = RESULTS_DIR / "equity_curve.csv"
-        if not ec_f.exists():
-            _bt.update({"running": False, "error": "No equity curve generated"})
-            return
+        _bt["progress"] = 35
 
-        ec = _load_equity_csv(ec_f)
-        s_eq, e_eq = float(ec["equity"].iloc[0]), float(ec["equity"].iloc[-1])
-        days = max((ec.index[-1] - ec.index[0]).days, 1)
-        years = days / 365.25
-        ret = (e_eq / s_eq - 1) * 100
-        cagr = ((e_eq / s_eq) ** (1 / years) - 1) * 100
-        rets = ec["equity"].pct_change().dropna()
-        excess = rets - 0.045 / 252
-        sharpe = float((excess.mean() / excess.std()) * np.sqrt(252)) if excess.std() > 0 else 0
-        roll_max = ec["equity"].cummax()
-        max_dd = float(((ec["equity"] - roll_max) / roll_max).min() * 100)
-        dd_series = ((ec["equity"] - roll_max) / roll_max * 100).round(2).tolist()
+        # ── 2. Signal simulation per symbol ─────────────────────────────
+        all_trades: List[Dict] = []
+        for sym, full_df in bars_full.items():
+            n = len(full_df)
+            # Find the index where the requested period starts
+            period_start_idx = next(
+                (i for i, ts in enumerate(full_df.index) if ts >= start_dt), None
+            )
+            if period_start_idx is None:
+                period_start_idx = max(50, n - req_days)
+            period_start_idx = max(period_start_idx, 15)  # need warmup rows
 
-        n_trades = 0
-        tl_f = RESULTS_DIR / "trade_log.csv"
-        if tl_f.exists():
-            n_trades = len(pd.read_csv(tl_f))
+            for i in range(period_start_idx, n - 2):
+                if full_df.index[i] > end_dt:
+                    break
+                scored = score_symbol(full_df.iloc[: i + 1], sym)
+                if not scored or not scored["firing_signals"]:
+                    continue
+                entry = float(full_df["open"].iloc[i + 1])
+                if entry <= 0:
+                    continue
+                target_px = entry * 1.05
+                stop_px   = entry * 0.97
+                exit_px   = float(full_df["close"].iloc[min(i + 10, n - 1)])
+                for j in range(i + 1, min(i + 11, n)):
+                    if float(full_df["high"].iloc[j]) >= target_px:
+                        exit_px = target_px
+                        break
+                    if float(full_df["low"].iloc[j]) <= stop_px:
+                        exit_px = stop_px
+                        break
+                all_trades.append({
+                    "date":   full_df.index[i + 1],
+                    "symbol": sym,
+                    "ret":    (exit_px / entry - 1),
+                })
 
-        rh_f = RESULTS_DIR / "regime_history.csv"
-        regime_breakdown = []
-        if rh_f.exists():
-            rh = pd.read_csv(rh_f, index_col=0)
-            if "regime" in rh.columns:
-                counts = rh["regime"].value_counts()
-                regime_breakdown = [
-                    {"regime": r, "pct": round(c / len(rh) * 100, 1)}
-                    for r, c in counts.items()
-                ]
+        _bt["progress"] = 70
+
+        # ── 3. Build portfolio equity curve ─────────────────────────────
+        # Use primary symbol's date range as the x-axis
+        primary_sym = list(bars_full.keys())[0]
+        primary_df  = bars_full[primary_sym]
+        period_df   = primary_df[primary_df.index >= start_dt]
+        if period_df.empty:
+            period_df = primary_df.tail(req_days)
+
+        alloc_per_trade = 0.10  # 10% of portfolio per signal
+        equity          = 100_000.0
+        trade_by_date: Dict[pd.Timestamp, List[float]] = {}
+        for t in all_trades:
+            trade_by_date.setdefault(t["date"], []).append(t["ret"])
+
+        curve_dates:  List[str]   = []
+        curve_values: List[float] = []
+        for ts in period_df.index:
+            if ts in trade_by_date:
+                rets = trade_by_date[ts]
+                port_ret = sum(r * alloc_per_trade for r in rets)
+                equity *= (1 + port_ret)
+            curve_dates.append(ts.strftime("%Y-%m-%d"))
+            curve_values.append(round(equity, 2))
+
+        if len(curve_values) < 2:
+            curve_dates  = [start, end]
+            curve_values = [100_000.0, 100_000.0]
+
+        # ── 4. Stats ─────────────────────────────────────────────────────
+        s_eq, e_eq = curve_values[0], curve_values[-1]
+        ret  = (e_eq / s_eq - 1) * 100
+        actual_days = max((pd.Timestamp(curve_dates[-1]) - pd.Timestamp(curve_dates[0])).days, 1)
+        years = actual_days / 365.25
+        cagr  = ((e_eq / s_eq) ** (1 / years) - 1) * 100 if years >= (1/12) else ret
+
+        eq_s   = pd.Series(curve_values)
+        rets_s = eq_s.pct_change().dropna()
+        excess = rets_s - 0.045 / 252
+        sharpe = float((excess.mean() / excess.std()) * np.sqrt(252)) if excess.std() > 0 else 0.0
+
+        roll_max = eq_s.cummax()
+        dd_vals  = ((eq_s - roll_max) / roll_max * 100).round(2).tolist()
+        max_dd   = float(min(dd_vals))
+
+        wins   = [t["ret"] for t in all_trades if t["ret"] > 0]
+        losses = [t["ret"] for t in all_trades if t["ret"] <= 0]
+        win_rate = round(len(wins) / len(all_trades) * 100, 1) if all_trades else 0.0
 
         summary = {
-            "total_return": round(ret, 2),
-            "cagr": round(cagr, 2),
-            "sharpe": round(sharpe, 3),
-            "max_drawdown": round(max_dd, 2),
-            "n_trades": n_trades,
-            "equity_dates": ec.index.strftime("%Y-%m-%d").tolist(),
-            "equity_values": ec["equity"].round(2).tolist(),
-            "drawdown_values": dd_series,
-            "regime_breakdown": regime_breakdown,
-            "symbols": symbols,
-            "start_date": start,
-            "end_date": end,
+            "total_return":   round(ret,    2),
+            "cagr":           round(cagr,   2),
+            "sharpe":         round(sharpe, 3),
+            "max_drawdown":   round(max_dd, 2),
+            "n_trades":       len(all_trades),
+            "win_rate":       win_rate,
+            "equity_dates":   curve_dates,
+            "equity_values":  curve_values,
+            "drawdown_values": dd_vals,
+            "regime_breakdown": [],
+            "symbols":        symbols,
+            "start_date":     start,
+            "end_date":       end,
         }
 
         with get_db() as conn:
             conn.execute(
-                "INSERT INTO backtest_runs (symbols,start_date,end_date,total_return,cagr,sharpe,max_drawdown,n_trades) VALUES (?,?,?,?,?,?,?,?)",
-                (json.dumps(symbols), start, end, ret, cagr, sharpe, max_dd, n_trades),
+                "INSERT INTO backtest_runs "
+                "(symbols,start_date,end_date,total_return,cagr,sharpe,max_drawdown,n_trades) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (json.dumps(symbols), start, end, ret, cagr, sharpe, max_dd, len(all_trades)),
             )
 
         _bt.update({"running": False, "progress": 100, "result": summary})
-    except subprocess.TimeoutExpired:
-        _bt.update({"running": False, "error": "Backtest timed out (>6 min)"})
+
     except Exception as e:
-        _bt.update({"running": False, "error": str(e)})
+        import traceback as _tb
+        _bt.update({"running": False, "error": str(e) + "\n" + _tb.format_exc()[-800:]})
 
 
 # ── Watchlist routes ───────────────────────────────────────────────
@@ -583,6 +656,8 @@ def list_plays(status: Optional[str] = None):
                 else:
                     p["current_pnl"] = round(((p["entry_price"] or cur) - cur) * (p["shares"] or 0), 2)
                 p["current_price"] = cur
+                p["day_change"] = q.get("change")
+                p["day_change_pct"] = q.get("change_pct")
     return plays
 
 

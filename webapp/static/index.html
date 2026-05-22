@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full bg-gray-950">
+<html lang="en" class="h-full bg-gray-50">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -26,14 +26,14 @@
 </script>
 <style>
   body { font-family: 'Inter', system-ui, sans-serif; }
-  .tab-active { border-bottom: 2px solid #6366f1; color: #a5b4fc; }
+  .tab-active { border-bottom: 2px solid #4f46e5; color: #4338ca; }
   .tab-inactive { border-bottom: 2px solid transparent; color: #6b7280; }
-  .tab-inactive:hover { color: #9ca3af; }
-  .card { background: #1a1a24; border: 1px solid #252535; border-radius: 12px; }
-  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 50; display: flex; align-items: center; justify-content: center; }
-  .modal-box { background: #1a1a24; border: 1px solid #252535; border-radius: 16px; padding: 28px; width: 520px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
-  .input { background: #111118; border: 1px solid #252535; border-radius: 8px; color: #e5e7eb; padding: 8px 12px; width: 100%; outline: none; transition: border 0.2s; }
-  .input:focus { border-color: #6366f1; }
+  .tab-inactive:hover { color: #374151; }
+  .card { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 12px; }
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 50; display: flex; align-items: center; justify-content: center; }
+  .modal-box { background: #ffffff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 28px; width: 520px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
+  .input { background: #f9fafb; border: 1px solid #d1d5db; border-radius: 8px; color: #111827; padding: 8px 12px; width: 100%; outline: none; transition: border 0.2s; }
+  .input:focus { border-color: #4f46e5; }
   .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.15s; border: none; }
   .btn-primary { background: #4f46e5; color: #fff; }
   .btn-primary:hover { background: #4338ca; }
@@ -41,29 +41,35 @@
   .btn-danger:hover { background: #b91c1c; }
   .btn-success { background: #16a34a; color: #fff; }
   .btn-success:hover { background: #15803d; }
-  .btn-ghost { background: transparent; color: #9ca3af; border: 1px solid #252535; }
-  .btn-ghost:hover { background: #252535; color: #e5e7eb; }
+  .btn-ghost { background: transparent; color: #6b7280; border: 1px solid #d1d5db; }
+  .btn-ghost:hover { background: #f3f4f6; color: #374151; }
   .badge { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 600; }
-  .badge-bull { background: #14532d40; color: #4ade80; border: 1px solid #166534; }
-  .badge-bear { background: #7f1d1d40; color: #f87171; border: 1px solid #991b1b; }
-  .badge-neutral { background: #1e293b; color: #94a3b8; border: 1px solid #334155; }
-  .pnl-pos { color: #4ade80; }
+  .badge-bull { background: #dcfce7; color: #16a34a; border: 1px solid #86efac; }
+  .badge-bear { background: #fee2e2; color: #dc2626; border: 1px solid #fca5a5; }
+  .badge-neutral { background: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; }
+  .pnl-pos { color: #16a34a; font-weight: 600; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .pnl-neg { color: #f87171; }
+  .pnl-neg { color: #dc2626; font-weight: 600; }
   .scrollbar-thin::-webkit-scrollbar { width: 4px; }
   .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
-  .scrollbar-thin::-webkit-scrollbar-thumb { background: #252535; border-radius: 99px; }
-  .progress-bar { height: 6px; border-radius: 99px; background: #252535; overflow: hidden; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 99px; }
+  .progress-bar { height: 6px; border-radius: 99px; background: #e5e7eb; overflow: hidden; }
   .progress-fill { height: 100%; background: linear-gradient(90deg, #4f46e5, #7c3aed); border-radius: 99px; transition: width 0.4s; }
   .signal-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; margin-bottom: 4px; }
-  .signal-bull { background: #14532d20; }
-  .signal-bear { background: #7f1d1d20; }
-  .signal-neutral { background: #1e293b40; }
-  tr.even { background: #111118; }
-  tr:hover td { background: #1e1e2e !important; }
+  .signal-bull { background: #f0fdf4; }
+  .signal-bear { background: #fef2f2; }
+  .signal-neutral { background: #f8fafc; }
+  tr.even { background: #f9fafb; }
+  tr:hover td { background: #f3f4f6 !important; }
+  .brok-ticker { color: #1d4ed8; font-weight: 700; font-size: 15px; }
+  .brok-name { color: #6b7280; font-size: 11px; margin-top: 1px; }
+  .brok-th { color: #1d4ed8; font-size: 12px; font-weight: 600; text-align: right; padding: 10px 16px; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
+  .brok-th-left { color: #1d4ed8; font-size: 12px; font-weight: 600; text-align: left; padding: 10px 16px; border-bottom: 1px solid #e5e7eb; }
+  .brok-td { font-size: 13px; padding: 12px 16px; text-align: right; border-bottom: 1px solid #f3f4f6; color: #111827; }
+  .brok-td-left { font-size: 13px; padding: 12px 16px; text-align: left; border-bottom: 1px solid #f3f4f6; }
 </style>
 </head>
-<body class="h-full text-gray-200 antialiased">
+<body class="h-full text-gray-900 antialiased">
 
 <!-- YouTube player target (lives outside modal so it persists) -->
 <div id="yt-player" style="position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;bottom:0;right:0"></div>
@@ -79,14 +85,14 @@
 </div>
 
 <!-- ── Header ── -->
-<header class="border-b border-gray-700 bg-gray-900 sticky top-0 z-40">
+<header class="border-b border-gray-200 bg-white sticky top-0 z-40 shadow-sm">
   <div class="max-w-7xl mx-auto px-4 flex items-center h-14 gap-6">
     <div class="flex items-center gap-2 mr-4">
       <svg class="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
       </svg>
       <span class="font-semibold text-white text-lg tracking-tight">Regime Trader</span>
-      <span class="text-xs bg-indigo-900 text-indigo-300 px-2 py-0.5 rounded-full ml-1">PAPER</span>
+      <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full ml-1">PAPER</span>
     </div>
     <!-- Tabs -->
     <nav class="flex gap-1 flex-1">
@@ -113,7 +119,7 @@
 <div id="page-watchlist">
   <div class="flex items-center justify-between mb-4">
     <div>
-      <h1 class="text-xl font-semibold text-white">Watchlist</h1>
+      <h1 class="text-xl font-semibold text-gray-900">Watchlist</h1>
       <p class="text-sm text-gray-500 mt-0.5">Live quotes and technical signals. Click any row to analyze.</p>
     </div>
     <button onclick="openAddSymbol()" class="btn btn-primary">
@@ -125,7 +131,7 @@
   <div class="card overflow-hidden">
     <table class="w-full text-sm">
       <thead>
-        <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
+        <tr class="border-b border-gray-200 text-gray-500 text-xs uppercase tracking-wider bg-gray-50">
           <th class="text-left px-4 py-3">Symbol</th>
           <th class="text-right px-4 py-3">Price</th>
           <th class="text-right px-4 py-3">Change</th>
@@ -149,7 +155,7 @@
   <!-- Header -->
   <div class="flex items-center justify-between mb-4">
     <div>
-      <h1 class="text-xl font-semibold text-white">Hand Picks Scanner</h1>
+      <h1 class="text-xl font-semibold text-gray-900">Hand Picks Scanner</h1>
       <p class="text-sm text-gray-500 mt-0.5">100+ sector symbols — composite score across momentum, trend, RSI, volume &amp; patterns. Push top picks directly to the bot.</p>
     </div>
     <div class="flex gap-2 flex-wrap">
@@ -189,7 +195,7 @@
   <div id="pipeline-section" class="hidden mb-6">
     <div class="flex items-center justify-between mb-3">
       <div>
-        <h2 class="text-base font-semibold text-white">&#x1F7E2; Real Money Pipeline</h2>
+        <h2 class="text-base font-semibold text-gray-900">&#x1F7E2; Real Money Pipeline</h2>
         <p class="text-xs text-gray-500">Symbols that passed 90-day qualification: win rate ≥50%, avg return ≥0.5%, profit factor ≥1.2, ≥3 trades</p>
       </div>
       <span id="pipeline-count" class="text-sm font-semibold text-green-400"></span>
@@ -197,7 +203,7 @@
     <div class="card overflow-hidden mb-3">
       <table class="w-full text-sm">
         <thead>
-          <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
+          <tr class="border-b border-gray-200 text-gray-500 text-xs uppercase tracking-wider bg-gray-50">
             <th class="text-left px-4 py-3">Symbol</th>
             <th class="text-right px-4 py-3">Win Rate</th>
             <th class="text-right px-4 py-3">Avg Return</th>
@@ -232,7 +238,7 @@
 
   <!-- Firing Now -->
   <div id="firing-signals-section" class="hidden mb-6">
-    <h2 class="text-base font-semibold text-white mb-3">Firing Now</h2>
+    <h2 class="text-base font-semibold text-gray-900 mb-3">Firing Now</h2>
     <div id="firing-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3"></div>
   </div>
 
@@ -240,7 +246,7 @@
   <div id="scanner-results" class="hidden mb-6">
     <div class="flex items-center justify-between mb-3">
       <div>
-        <h2 class="text-base font-semibold text-white">Top Opportunities</h2>
+        <h2 class="text-base font-semibold text-gray-900">Top Opportunities</h2>
         <p class="text-xs text-gray-500" id="scan-meta">Sorted by composite score (0–100)</p>
       </div>
       <button onclick="pushTopPicks()" class="btn btn-success text-sm">
@@ -251,7 +257,7 @@
     <div class="card overflow-hidden">
       <table class="w-full text-sm">
         <thead>
-          <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
+          <tr class="border-b border-gray-200 text-gray-500 text-xs uppercase tracking-wider bg-gray-50">
             <th class="text-left px-4 py-3">Symbol</th>
             <th class="text-right px-4 py-3">Price</th>
             <th class="px-4 py-3">BSH Score</th>
@@ -271,7 +277,7 @@
 
   <!-- Score Methodology -->
   <div class="card p-5 mb-6">
-    <h3 class="text-sm font-semibold text-white mb-3">Score Methodology (0–100)</h3>
+    <h3 class="text-sm font-semibold text-gray-900 mb-3">Score Methodology (0–100)</h3>
     <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
       <div class="bg-gray-900 rounded-lg p-3 border border-indigo-900">
         <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-indigo-400"></div><span class="text-sm font-semibold text-indigo-300">Trend</span><span class="text-xs text-gray-500 ml-auto">25 pts</span></div>
@@ -300,7 +306,7 @@
   <div id="sim-section" class="mb-6">
     <div class="flex items-center justify-between mb-3">
       <div>
-        <h2 class="text-base font-semibold text-white">90-Day Signal Simulation</h2>
+        <h2 class="text-base font-semibold text-gray-900">90-Day Signal Simulation</h2>
         <p class="text-xs text-gray-500">Walk-forward: enter at next open, exit at +5% target / −3% stop / 10 days. First 30 symbols.</p>
       </div>
     </div>
@@ -308,7 +314,7 @@
     <div class="card overflow-hidden">
       <table class="w-full text-sm">
         <thead>
-          <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
+          <tr class="border-b border-gray-200 text-gray-500 text-xs uppercase tracking-wider bg-gray-50">
             <th class="text-left px-4 py-3">Signal</th>
             <th class="text-right px-4 py-3">Trades</th>
             <th class="text-right px-4 py-3">Win Rate</th>
@@ -339,7 +345,7 @@
 <div id="page-plays" class="hidden">
   <div class="flex items-center justify-between mb-4">
     <div>
-      <h1 class="text-xl font-semibold text-white">Plays</h1>
+      <h1 class="text-xl font-semibold text-gray-900">Plays</h1>
       <p class="text-sm text-gray-500 mt-0.5">Track paper trades and submit orders to Alpaca.</p>
     </div>
     <button onclick="openNewPlay()" class="btn btn-primary">
@@ -349,28 +355,50 @@
   </div>
 
   <!-- Sub-tabs -->
-  <div class="flex gap-4 mb-4 border-b border-gray-700">
+  <div class="flex gap-4 mb-4 border-b border-gray-200">
     <button onclick="setPlaysTab('active')" id="plays-tab-active" class="tab-active pb-3 text-sm font-medium">Active</button>
     <button onclick="setPlaysTab('closed')" id="plays-tab-closed" class="tab-inactive pb-3 text-sm font-medium">Closed</button>
   </div>
 
-  <div id="plays-active-list" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"></div>
+  <!-- Active plays brokerage table -->
+  <div id="plays-active-list" class="card overflow-hidden">
+    <table class="w-full">
+      <thead>
+        <tr>
+          <th class="brok-th-left">Symbol / Name</th>
+          <th class="brok-th">Quantity</th>
+          <th class="brok-th">Price</th>
+          <th class="brok-th">Market Value</th>
+          <th class="brok-th">Capital Invested</th>
+          <th class="brok-th">Day Change<br><span style="font-weight:400;color:#6b7280">$ | %</span></th>
+          <th class="brok-th">Gain / Loss<br><span style="font-weight:400;color:#6b7280">$ | %</span></th>
+          <th class="brok-th">Stop / Target</th>
+          <th class="brok-th">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="plays-active-body">
+        <tr><td colspan="9" class="text-center py-10 text-gray-400">No active plays</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Closed plays table -->
   <div id="plays-closed-list" class="hidden">
     <div class="card overflow-hidden">
-      <table class="w-full text-sm">
+      <table class="w-full">
         <thead>
-          <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
-            <th class="text-left px-4 py-3">Symbol</th>
-            <th class="text-left px-4 py-3">Dir</th>
-            <th class="text-right px-4 py-3">Entry</th>
-            <th class="text-right px-4 py-3">Exit</th>
-            <th class="text-right px-4 py-3">P&L</th>
-            <th class="text-right px-4 py-3">P&L %</th>
-            <th class="text-left px-4 py-3">Closed</th>
+          <tr>
+            <th class="brok-th-left">Symbol</th>
+            <th class="brok-th">Entry</th>
+            <th class="brok-th">Exit</th>
+            <th class="brok-th">Capital Invested</th>
+            <th class="brok-th">Gain / Loss $</th>
+            <th class="brok-th">Gain / Loss %</th>
+            <th class="brok-th-left">Closed</th>
           </tr>
         </thead>
         <tbody id="plays-closed-body">
-          <tr><td colspan="7" class="text-center py-8 text-gray-500">No closed plays</td></tr>
+          <tr><td colspan="7" class="text-center py-8 text-gray-400">No closed plays</td></tr>
         </tbody>
       </table>
     </div>
@@ -383,7 +411,7 @@
 <div id="page-backtest" class="hidden">
   <div class="flex items-center justify-between mb-4">
     <div>
-      <h1 class="text-xl font-semibold text-white">Backtesting</h1>
+      <h1 class="text-xl font-semibold text-gray-900">Backtesting</h1>
       <p class="text-sm text-gray-500 mt-0.5">Swing signal backtest using live Alpaca data.</p>
     </div>
   </div>
@@ -391,7 +419,7 @@
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
     <!-- Config panel -->
     <div class="card p-5">
-      <h3 class="font-medium text-white mb-4">Configure Run</h3>
+      <h3 class="font-medium text-gray-900 mb-4">Configure Run</h3>
       <div class="space-y-3">
         <div>
           <label class="block text-xs text-gray-500 mb-1">Symbols (comma-separated)</label>
@@ -430,7 +458,7 @@
 
     <!-- Metrics panel -->
     <div class="card p-5 col-span-2">
-      <h3 class="font-medium text-white mb-4">Latest Results</h3>
+      <h3 class="font-medium text-gray-900 mb-4">Latest Results</h3>
       <div id="bt-metrics" class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
         <div class="bg-gray-900 rounded-lg p-3">
           <p class="text-xs text-gray-500">Total Return</p>
@@ -457,23 +485,23 @@
   <!-- Charts -->
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
     <div class="card p-4">
-      <h3 class="font-medium text-white mb-3">Equity Curve</h3>
+      <h3 class="font-medium text-gray-900 mb-3">Equity Curve</h3>
       <canvas id="bt-equity-chart" height="200"></canvas>
     </div>
     <div class="card p-4">
-      <h3 class="font-medium text-white mb-3">Drawdown</h3>
+      <h3 class="font-medium text-gray-900 mb-3">Drawdown</h3>
       <canvas id="bt-dd-chart" height="200"></canvas>
     </div>
   </div>
 
   <!-- Run history -->
   <div class="card overflow-hidden">
-    <div class="px-4 py-3 border-b border-gray-700">
+    <div class="px-4 py-3 border-b border-gray-200">
       <h3 class="font-medium text-white">Past Runs</h3>
     </div>
     <table class="w-full text-sm">
       <thead>
-        <tr class="text-gray-500 text-xs uppercase tracking-wider">
+        <tr class="text-gray-500 text-xs uppercase tracking-wider bg-gray-50">
           <th class="text-left px-4 py-3">Date</th>
           <th class="text-left px-4 py-3">Symbols</th>
           <th class="text-left px-4 py-3">Period</th>
@@ -496,7 +524,7 @@
 <div id="page-history" class="hidden">
   <div class="flex items-center justify-between mb-4">
     <div>
-      <h1 class="text-xl font-semibold text-white">Trade History</h1>
+      <h1 class="text-xl font-semibold text-gray-900">Trade History</h1>
       <p class="text-sm text-gray-500 mt-0.5">Closed plays and P&amp;L analytics.</p>
     </div>
     <button onclick="exportHistory()" class="btn btn-ghost text-xs">
@@ -535,19 +563,19 @@
 
   <!-- Monthly chart -->
   <div class="card p-4 mb-6">
-    <h3 class="font-medium text-white mb-3">Monthly P&L</h3>
+    <h3 class="font-medium text-gray-900 mb-3">Monthly P&L</h3>
     <canvas id="h-monthly-chart" height="120"></canvas>
   </div>
 
   <!-- Trade log -->
   <div class="card overflow-hidden">
-    <div class="px-4 py-3 border-b border-gray-700 flex items-center gap-3">
+    <div class="px-4 py-3 border-b border-gray-200 flex items-center gap-3">
       <h3 class="font-medium text-white flex-1">Trade Log</h3>
       <input type="text" placeholder="Filter by symbol…" id="h-filter" oninput="filterHistory()" class="input text-xs py-1.5 w-36" />
     </div>
     <table class="w-full text-sm">
       <thead>
-        <tr class="border-b border-gray-700 text-gray-500 text-xs uppercase tracking-wider">
+        <tr class="border-b border-gray-200 text-gray-500 text-xs uppercase tracking-wider bg-gray-50">
           <th class="text-left px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('symbol')">Symbol</th>
           <th class="text-left px-4 py-3">Dir</th>
           <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('entry_price')">Entry</th>
@@ -680,7 +708,7 @@
         <label class="block text-xs text-gray-500 mb-1">Notes</label>
         <input id="np-notes" type="text" class="input" placeholder="Trade rationale…" />
       </div>
-      <div class="flex items-center gap-3 bg-gray-900 rounded-lg p-3">
+      <div class="flex items-center gap-3 bg-gray-50 rounded-lg p-3">
         <input id="np-submit-order" type="checkbox" class="w-4 h-4 accent-indigo-500" />
         <div>
           <p class="text-sm text-white">Submit to Alpaca</p>
@@ -976,7 +1004,7 @@ function _renderOpportunities(rows) {
     const rsiCol = r.rsi>70?'#f87171':r.rsi<30?'#4ade80':'#d1d5db';
     const volCol = r.vol_ratio>=1.5?'#fbbf24':'#d1d5db';
     const bgRow = i%2===0?'':'background:#111118';
-    return `<tr class="border-b border-gray-700" style="${bgRow}">
+    return `<tr class="border-b border-gray-200" style="${bgRow}">
       <td class="px-4 py-2.5 font-bold text-white">${r.symbol}</td>
       <td class="px-4 py-2.5 text-right text-gray-200">$${r.price}</td>
       <td class="px-4 py-2.5">
@@ -1008,7 +1036,7 @@ function _renderSim() {
   tbody.innerHTML = _simResult.map(row=>{
     const wc = row.win_rate>=60?'#4ade80':row.win_rate>=45?'#fbbf24':'#f87171';
     const rc = row.avg_return>=1?'#4ade80':row.avg_return>=0?'#fbbf24':'#f87171';
-    return `<tr class="border-b border-gray-700">
+    return `<tr class="border-b border-gray-200">
       <td class="px-4 py-3"><span style="color:${row.hex};font-weight:600">${row.label}</span></td>
       <td class="px-4 py-3 text-right text-gray-300">${row.count}</td>
       <td class="px-4 py-3 text-right font-semibold" style="color:${wc}">${row.win_rate}%</td>
@@ -1125,7 +1153,7 @@ function _renderPipeline() {
   tbody.innerHTML = ready.length ? ready.map((r,i)=>{
     const bg = i%2===0?'':'background:#111118';
     const retColor = r.avg_return>=1?'#4ade80':r.avg_return>=0?'#fbbf24':'#f87171';
-    return `<tr class="border-b border-gray-700" style="${bg}">
+    return `<tr class="border-b border-gray-200" style="${bg}">
       <td class="px-4 py-2.5 font-bold text-white">${r.symbol}</td>
       <td class="px-4 py-2.5 text-right text-green-400 font-semibold">${r.win_rate}%</td>
       <td class="px-4 py-2.5 text-right font-semibold" style="color:${retColor}">${r.avg_return>0?'+':''}${r.avg_return}%</td>
@@ -1311,7 +1339,7 @@ async function analyzeSymbol(sym) {
         const tc = sig.bias==='bullish'?'text-green-400':sig.bias==='bearish'?'text-red-400':'text-gray-400';
         return `<div class="signal-row ${sc}"><span class="text-sm text-gray-200">${sig.name}</span><span class="font-mono text-sm ${tc}">${sig.value}</span></div>`;
       }).join('')}
-      <div class="mt-4 bg-gray-900 rounded-lg p-3">
+      <div class="mt-4 bg-gray-50 rounded-lg p-3">
         <p class="text-xs text-gray-500 mb-1">Suggested Setup</p>
         <div class="flex gap-4 text-sm">
           <div>Entry: <span class="font-mono text-indigo-300">${fmt$(s.suggested_entry)}</span></div>
@@ -1348,55 +1376,53 @@ async function loadPlays() {
     renderActivePlays(plays.filter(p=>p.status==='ACTIVE'||p.status==='PENDING'));
     renderClosedPlays(plays.filter(p=>p.status==='CLOSED'));
   } catch(e) {
-    document.getElementById('plays-active-list').innerHTML = `<div class="text-red-400">${e.message}</div>`;
+    document.getElementById('plays-active-body').innerHTML = `<tr><td colspan="9" class="text-center py-6 text-red-400">${e.message}</td></tr>`;
   }
 }
 
 function renderActivePlays(plays) {
-  const el = document.getElementById('plays-active-list');
+  const tbody = document.getElementById('plays-active-body');
   if(!plays.length) {
-    el.innerHTML = '<div class="col-span-3 text-center py-12 text-gray-500 card p-8">No active plays. Click "New Play" to create one.</div>';
+    tbody.innerHTML = '<tr><td colspan="9" class="text-center py-10 text-gray-400">No active plays. Click "New Play" to create one.</td></tr>';
     return;
   }
-  el.innerHTML = plays.map(p=>{
-    const cpnl = p.current_pnl;
-    const pnlStr = cpnl!=null ? `<span class="font-mono text-sm ${pnlClass(cpnl)}">${cpnl>=0?'+':''}${fmt$(cpnl)}</span>` : '—';
-    const cur = p.current_price ? `<span class="text-xs text-gray-500 ml-2">@ ${fmt$(p.current_price)}</span>` : '';
-    const dirColor = p.direction==='LONG'?'text-green-400':'text-red-400';
-    const statusColor = p.status==='ACTIVE'?'bg-green-900/40 text-green-400 border-green-800':'bg-yellow-900/40 text-yellow-400 border-yellow-800';
-    return `<div class="card p-5 flex flex-col gap-3">
-      <div class="flex items-start justify-between">
-        <div>
-          <span class="text-lg font-bold text-white">${p.symbol}</span>
-          <span class="ml-2 text-sm ${dirColor} font-medium">${p.direction}</span>
-        </div>
-        <span class="text-xs px-2 py-0.5 rounded-full border ${statusColor}">${p.status}</span>
-      </div>
-      <div class="grid grid-cols-3 gap-2 text-xs">
-        <div class="bg-gray-900 rounded p-2 text-center">
-          <p class="text-gray-500">Entry</p>
-          <p class="font-mono text-white mt-0.5">${fmt$(p.entry_price)}</p>
-        </div>
-        <div class="bg-gray-900 rounded p-2 text-center">
-          <p class="text-gray-500">Stop</p>
-          <p class="font-mono text-red-400 mt-0.5">${fmt$(p.stop_loss)}</p>
-        </div>
-        <div class="bg-gray-900 rounded p-2 text-center">
-          <p class="text-gray-500">Target</p>
-          <p class="font-mono text-green-400 mt-0.5">${fmt$(p.take_profit)}</p>
-        </div>
-      </div>
-      <div class="flex items-center justify-between border-t border-gray-700 pt-2">
-        <div class="text-sm">P&L: ${pnlStr}${cur}</div>
-        <span class="text-xs text-gray-500">${p.shares} shares</span>
-      </div>
-      ${p.notes?`<p class="text-xs text-gray-500 italic">${p.notes}</p>`:''}
-      ${p.alpaca_order_id?`<p class="text-xs text-indigo-400">Order: ${p.alpaca_order_id}</p>`:''}
-      <div class="flex gap-2 mt-auto">
-        <button onclick="openClosePlay(${p.id})" class="btn btn-danger text-xs py-1.5 flex-1 justify-center">Close</button>
-        <button onclick="deletePlay(${p.id})" class="btn btn-ghost text-xs py-1.5 px-3 text-red-400">Del</button>
-      </div>
-    </div>`;
+  tbody.innerHTML = plays.map((p, i) => {
+    const cur     = p.current_price || p.entry_price || 0;
+    const entry   = p.entry_price || 0;
+    const shares  = p.shares || 0;
+    const mktVal  = cur * shares;
+    const capital = entry * shares;
+    const gl$     = p.current_pnl != null ? p.current_pnl : (mktVal - capital);
+    const glPct   = capital > 0 ? (gl$ / capital * 100) : 0;
+    const dayChg$ = p.day_change != null ? p.day_change * shares : null;
+    const dayPct  = p.day_change_pct != null ? p.day_change_pct : null;
+    const glColor = gl$ >= 0 ? '#16a34a' : '#dc2626';
+    const dayColor = dayChg$ == null ? '#6b7280' : dayChg$ >= 0 ? '#16a34a' : '#dc2626';
+    const bg = i % 2 === 1 ? 'background:#f9fafb' : '';
+    return `<tr style="${bg}">
+      <td class="brok-td-left">
+        <div class="brok-ticker">${p.symbol}</div>
+        <div class="brok-name">${p.direction} · ${p.signal || 'swing'}</div>
+      </td>
+      <td class="brok-td">${shares}</td>
+      <td class="brok-td">${cur ? fmt$(cur) : '—'}</td>
+      <td class="brok-td">${fmt$(mktVal)}</td>
+      <td class="brok-td">${fmt$(capital)}</td>
+      <td class="brok-td" style="color:${dayColor}">
+        ${dayChg$ != null ? `${dayChg$>=0?'+':''}${fmt$(dayChg$)}<br><span style="font-size:11px">${dayPct>=0?'+':''}${dayPct.toFixed(2)}%</span>` : '—'}
+      </td>
+      <td class="brok-td" style="color:${glColor};font-weight:600">
+        ${gl$>=0?'+':''}${fmt$(gl$)}<br><span style="font-size:11px;font-weight:400">${glPct>=0?'+':''}${glPct.toFixed(2)}%</span>
+      </td>
+      <td class="brok-td" style="font-size:11px">
+        <span style="color:#dc2626">▼ ${fmt$(p.stop_loss)}</span><br>
+        <span style="color:#16a34a">▲ ${fmt$(p.take_profit)}</span>
+      </td>
+      <td class="brok-td">
+        <button onclick="openClosePlay(${p.id})" class="btn btn-danger text-xs py-1 px-2">Close</button>
+        <button onclick="deletePlay(${p.id})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:14px;margin-left:4px">✕</button>
+      </td>
+    </tr>`;
   }).join('');
 }
 
@@ -1406,16 +1432,19 @@ function renderClosedPlays(plays) {
     tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-500">No closed plays</td></tr>';
     return;
   }
-  tbody.innerHTML = plays.map((p,i)=>`
-    <tr class="${i%2===0?'':'even'}">
-      <td class="px-4 py-3 font-medium">${p.symbol}</td>
-      <td class="px-4 py-3 ${p.direction==='LONG'?'text-green-400':'text-red-400'}">${p.direction}</td>
-      <td class="px-4 py-3 text-right font-mono">${fmt$(p.entry_price)}</td>
-      <td class="px-4 py-3 text-right font-mono">${fmt$(p.exit_price)}</td>
-      <td class="px-4 py-3 text-right font-mono ${pnlClass(p.pnl)}">${p.pnl>=0?'+':''}${fmt$(p.pnl)}</td>
-      <td class="px-4 py-3 text-right font-mono ${pnlClass(p.pnl_pct)}">${fmtPct(p.pnl_pct)}</td>
-      <td class="px-4 py-3 text-gray-400 text-xs">${fmtDate(p.exit_date)}</td>
-    </tr>`).join('');
+  tbody.innerHTML = plays.map((p,i)=>{
+    const capital = (p.entry_price||0) * (p.shares||0);
+    const glColor = (p.pnl||0) >= 0 ? '#16a34a' : '#dc2626';
+    return `<tr class="${i%2===1?'even':''}">
+      <td class="brok-td-left"><div class="brok-ticker">${p.symbol}</div><div class="brok-name">${p.direction}</div></td>
+      <td class="brok-td">${fmt$(p.entry_price)}</td>
+      <td class="brok-td">${fmt$(p.exit_price)}</td>
+      <td class="brok-td">${fmt$(capital)}</td>
+      <td class="brok-td" style="color:${glColor};font-weight:600">${(p.pnl||0)>=0?'+':''}${fmt$(p.pnl)}</td>
+      <td class="brok-td" style="color:${glColor}">${fmtPct(p.pnl_pct)}</td>
+      <td class="brok-td-left text-gray-500" style="font-size:12px">${fmtDate(p.exit_date)}</td>
+    </tr>`;
+  }).join('');
 }
 
 function openNewPlay() {
