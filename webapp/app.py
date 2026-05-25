@@ -1281,23 +1281,31 @@ def get_portfolio():
 
 
 def _compute_return_over_period(df: "pd.DataFrame", start: str, end: str) -> Optional[float]:
-    """Return pct return of close prices between start and end dates (inclusive)."""
+    """Return pct return of close prices between start and end dates (inclusive).
+    Returns None if the window contains fewer than 2 trading bars — no fallback to avoid
+    inflating returns from multi-year data when the play is too recent."""
     try:
         s = pd.Timestamp(start)
         e = pd.Timestamp(end)
-        sub = df[(df.index >= s) & (df.index <= e)]
-        if len(sub) < 2:
-            # If start is before earliest bar, use earliest available
-            sub = df[df.index <= e]
-            if len(sub) < 2:
-                return None
-        return float((sub["close"].iloc[-1] - sub["close"].iloc[0]) / sub["close"].iloc[0] * 100)
+        # Never measure a future end date
+        today_ts = pd.Timestamp(datetime.utcnow().strftime("%Y-%m-%d"))
+        if e > today_ts:
+            e = today_ts
+        # Need at least 1 bar before or on start to anchor the return
+        anchor = df[df.index <= s]
+        after  = df[(df.index > s) & (df.index <= e)]
+        if anchor.empty or after.empty:
+            return None
+        open_price = float(anchor["close"].iloc[-1])
+        close_price = float(after["close"].iloc[-1])
+        return round((close_price - open_price) / open_price * 100, 2)
     except Exception:
         return None
 
 
 def _find_peer(symbol: str, start: str, end: str, play_df: "pd.DataFrame") -> tuple:
-    """Find the most correlated peer in the same sector over the play period."""
+    """Find the most correlated peer in the same sector over the play period.
+    Requires at least 3 actual bars in the period — no multi-year fallback."""
     try:
         from data.sector_symbols import SYMBOL_SECTORS, SECTOR_SYMBOLS
         sectors = SYMBOL_SECTORS.get(symbol, [])
@@ -1309,27 +1317,35 @@ def _find_peer(symbol: str, start: str, end: str, play_df: "pd.DataFrame") -> tu
         candidates = [s for s in set(candidates) if s != symbol][:25]
         s_ts = pd.Timestamp(start)
         e_ts = pd.Timestamp(end)
-        play_sub = play_df[(play_df.index >= s_ts) & (play_df.index <= e_ts)]
-        if len(play_sub) < 5:
-            play_sub = play_df[play_df.index <= e_ts].tail(max(5, len(play_df)))
-        play_ret = play_sub["close"].pct_change().dropna()
+        today_ts = pd.Timestamp(datetime.utcnow().strftime("%Y-%m-%d"))
+        if e_ts > today_ts:
+            e_ts = today_ts
+        anchor = play_df[play_df.index <= s_ts]
+        after  = play_df[(play_df.index > s_ts) & (play_df.index <= e_ts)]
+        if anchor.empty or len(after) < 2:
+            return None, None
+        play_rets = after["close"].pct_change().dropna()
         best_sym, best_corr, best_ret = None, -2.0, None
         for peer in candidates:
             pdf = _load_bars(peer, days=400)
             if pdf is None or pdf.empty:
                 continue
-            peer_sub = pdf[(pdf.index >= s_ts) & (pdf.index <= e_ts)]
-            if len(peer_sub) < 5:
-                peer_sub = pdf[pdf.index <= e_ts].tail(max(5, len(pdf)))
-            peer_ret_s = peer_sub["close"].pct_change().dropna()
-            aligned = play_ret.align(peer_ret_s, join="inner")[0]
-            if len(aligned) < 5:
+            peer_after = pdf[(pdf.index > s_ts) & (pdf.index <= e_ts)]
+            if len(peer_after) < 2:
                 continue
-            corr = float(play_ret.align(peer_ret_s, join="inner")[0].corr(
-                play_ret.align(peer_ret_s, join="inner")[1]
-            ))
+            peer_rets = peer_after["close"].pct_change().dropna()
+            aligned_p, aligned_q = play_rets.align(peer_rets, join="inner")
+            if len(aligned_p) < 2:
+                continue
+            corr = float(aligned_p.corr(aligned_q))
             if corr > best_corr:
-                peer_total = _compute_return_over_period(pdf, start, end)
+                peer_anchor = pdf[pdf.index <= s_ts]
+                if peer_anchor.empty or peer_after.empty:
+                    continue
+                peer_total = round(
+                    (float(peer_after["close"].iloc[-1]) - float(peer_anchor["close"].iloc[-1]))
+                    / float(peer_anchor["close"].iloc[-1]) * 100, 2
+                )
                 best_sym, best_corr, best_ret = peer, corr, peer_total
         return best_sym, best_ret
     except Exception:
@@ -1349,20 +1365,26 @@ def _run_play_backtests():
         play_id = p["id"]
         sym = p["symbol"]
         status = p["status"]
-        start = p["entry_date"] or (p["created_at"] or today)[:10]
-        end = p["exit_date"][:10] if p["exit_date"] else today
+        # Prefer explicit entry_date; fall back to created_at date only (not datetime)
+        raw_start = p["entry_date"] or (p["created_at"] or today)
+        start = raw_start[:10]
+        end = (p["exit_date"] or today)[:10]
+        # Skip plays with no meaningful holding period (same-day or future)
+        if start >= today and status != "CLOSED":
+            results.append((play_id, sym, status, start, end, None, None, None, None, 0))
+            continue
         play_df = _load_bars(sym, days=400)
         if play_df is None:
             continue
         play_ret = _compute_return_over_period(play_df, start, end)
-        spy_ret = _compute_return_over_period(spy_df, start, end) if spy_df is not None else None
+        spy_ret  = _compute_return_over_period(spy_df, start, end) if spy_df is not None else None
         peer_sym, peer_ret = _find_peer(sym, start, end, play_df)
         beats_spy = 1 if (play_ret is not None and spy_ret is not None and play_ret > spy_ret) else 0
         results.append((play_id, sym, status, start, end,
-                         round(play_ret, 2) if play_ret is not None else None,
-                         round(spy_ret, 2) if spy_ret is not None else None,
+                         play_ret,
+                         spy_ret,
                          peer_sym,
-                         round(peer_ret, 2) if peer_ret is not None else None,
+                         peer_ret,
                          beats_spy))
     with get_db() as conn:
         conn.execute("DELETE FROM play_backtests")

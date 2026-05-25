@@ -2381,7 +2381,11 @@ function renderPlaysBacktest(rows) {
     const peerRet = r.peer_ret;
     const vsSpyVal  = (playRet != null && spyRet  != null) ? playRet - spyRet  : null;
     const vsPeerVal = (playRet != null && peerRet != null) ? playRet - peerRet : null;
+    const tooRecent = r.play_ret == null && r.status !== 'CLOSED';
     const retColor = (v) => v == null ? '#6b7280' : v >= 0 ? '#16a34a' : '#dc2626';
+    const retFmt = (v) => v == null
+      ? (tooRecent ? '<span style="color:#9ca3af;font-size:11px">Too recent</span>' : '—')
+      : `<span style="color:${retColor(v)}">${v>=0?'+':''}${v.toFixed(2)}%</span>`;
     const badge = (v) => {
       if (v == null) return '<span style="color:#9ca3af">—</span>';
       const c = v >= 0 ? '#dcfce7' : '#fee2e2';
@@ -2402,11 +2406,11 @@ function renderPlaysBacktest(rows) {
       </td>
       <td class="px-4 py-3 text-xs text-gray-500">${fmtDate(r.entry_date)} → ${r.status==='CLOSED'?fmtDate(r.end_date):'Today'}</td>
       <td class="px-4 py-3 text-sm text-gray-700">${daysHeld}</td>
-      <td class="px-4 py-3 text-right font-bold" style="color:${retColor(playRet)}">${playRet!=null?(playRet>=0?'+':'')+playRet.toFixed(2)+'%':'—'}</td>
-      <td class="px-4 py-3 text-right" style="color:${retColor(spyRet)}">${spyRet!=null?(spyRet>=0?'+':'')+spyRet.toFixed(2)+'%':'—'}</td>
+      <td class="px-4 py-3 text-right font-bold">${retFmt(playRet)}</td>
+      <td class="px-4 py-3 text-right">${retFmt(spyRet)}</td>
       <td class="px-4 py-3 text-right">${badge(vsSpyVal)}</td>
       <td class="px-4 py-3 text-sm text-gray-700">${r.peer_symbol||'—'}</td>
-      <td class="px-4 py-3 text-right" style="color:${retColor(peerRet)}">${peerRet!=null?(peerRet>=0?'+':'')+peerRet.toFixed(2)+'%':'—'}</td>
+      <td class="px-4 py-3 text-right">${retFmt(peerRet)}</td>
       <td class="px-4 py-3 text-right">${badge(vsPeerVal)}</td>
     </tr>`;
   }).join('');
