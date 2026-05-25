@@ -621,19 +621,76 @@ def watchlist_quotes():
         q = get_quote(sym)
         if not q:
             continue
-        sig_key = f"sig:{sym}"
-        sig = _cache.get(sig_key, ({"overall": "NEUTRAL", "rsi": 50, "buy_pct": 50}, 0))[0]
+        sig = get_signals(sym)
         results.append({**q,
                         "overall": sig.get("overall", "NEUTRAL"),
                         "bsh": sig.get("bsh", "HOLD"),
                         "rsi": sig.get("rsi", 50),
                         "buy_pct": sig.get("buy_pct", 50)})
+    # Sort by buy_pct descending (highest conviction BUY first)
+    results.sort(key=lambda x: x.get("buy_pct", 50), reverse=True)
     return results
 
 
 @app.get("/api/signals/{symbol}")
 def symbol_signals(symbol: str):
     return get_signals(symbol.upper())
+
+
+_NEWS_BULLISH = {"beat","surge","growth","upgrade","buy","strong","record","rally","gain","rise",
+                  "soar","jump","high","profit","outperform","positive","boost","expand","upside"}
+_NEWS_BEARISH = {"miss","drop","concern","risk","cut","loss","warning","downgrade","sell","decline",
+                  "fall","weak","slump","disappoint","below","fear","pressure","lawsuit","investigate"}
+
+@app.get("/api/news/{symbol}")
+def symbol_news(symbol: str):
+    sym = symbol.upper()
+    cache_key = f"news:{sym}"
+    now = time.time()
+    cached = _cache.get(cache_key)
+    if cached and now - cached[1] < 1800:   # 30-min cache
+        return cached[0]
+    try:
+        import requests as _req
+        api_key    = os.getenv("ALPACA_API_KEY", "")
+        api_secret = os.getenv("ALPACA_SECRET_KEY", "")
+        resp = _req.get(
+            "https://data.alpaca.markets/v1beta1/news",
+            params={"symbols": sym, "limit": 3, "sort": "desc"},
+            headers={"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": api_secret},
+            timeout=8,
+        )
+        articles = resp.json().get("news", [])
+    except Exception:
+        articles = []
+
+    result = []
+    for a in articles[:3]:
+        text = ((a.get("headline") or "") + " " + (a.get("summary") or "")).lower()
+        words = set(text.split())
+        bull = len(words & _NEWS_BULLISH)
+        bear = len(words & _NEWS_BEARISH)
+        if bull > bear:
+            sentiment, color = "BUY", "#16a34a"
+        elif bear > bull:
+            sentiment, color = "SELL", "#dc2626"
+        else:
+            sentiment, color = "HOLD", "#d97706"
+        summary = a.get("summary") or a.get("headline") or ""
+        if len(summary) > 180:
+            summary = summary[:177] + "…"
+        result.append({
+            "headline": a.get("headline", ""),
+            "source":   a.get("source", ""),
+            "url":      a.get("url", ""),
+            "summary":  summary,
+            "sentiment": sentiment,
+            "color":    color,
+            "published": (a.get("created_at") or "")[:10],
+        })
+
+    _cache[cache_key] = (result, now)
+    return result
 
 
 # ── Plays routes ───────────────────────────────────────────────────
