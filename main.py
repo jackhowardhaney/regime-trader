@@ -1,10 +1,17 @@
-"""Entry point for the regime-trader bot — Phase 7: Main Loop & Orchestration.
+"""Autonomous swing trader — finds setups, enters plays, manages exits on its own.
 
-CLI usage:
-  python main.py live --paper                  # paper trade
-  python main.py live --paper --dry-run        # full pipeline, no orders
-  python main.py live --paper --train-only     # train HMM and exit
-  python main.py live --dashboard              # display running instance dashboard
+The bot runs continuously. Every morning at market open it scans the full symbol
+universe for swing setups (EMA bounce, MACD cross, RSI reset, golden cross,
+momentum breakout, BB breakout, volume surge). Any symbol scoring ≥65 with an
+active signal gets a bracket order submitted automatically. Stops are set at
+1.5× ATR(14) below entry; targets at 3.75× ATR(14) above entry (2.5:1 R:R).
+No regime logic, no manual triggers.
+
+CLI:
+  python main.py live --paper                   # paper trade
+  python main.py live --paper --dry-run         # full pipeline, no orders
+  python main.py live --paper --scan-only       # run one scan and print results
+  python main.py live --dashboard               # display running instance dashboard
   python main.py backtest --symbols SPY --start 2019-01-01 --end 2024-12-31
   python main.py backtest --compare
   python main.py backtest --stress-test
@@ -20,20 +27,45 @@ import time
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import yaml
 from dotenv import load_dotenv
 
-logger = logging.getLogger("regime_trader")
+logger = logging.getLogger("swing_trader")
 
 _STATE_FILE = Path("state_snapshot.json")
 _LIVE_STATE_FILE = Path("live_state.json")
 _MODELS_DIR = Path("models")
-_MODEL_MAX_AGE_DAYS = 7
-_FEED_TIMEOUT_SEC = 120   # seconds before treating WebSocket as dropped
+_FEED_TIMEOUT_SEC = 120
+
+# Swing trading parameters
+MIN_SCORE = 65          # minimum opportunity score to enter a play
+MIN_SCORE_FORCED = 52   # lower threshold when daily minimum not yet hit
+MAX_POSITIONS = 15      # hard cap on concurrent open plays
+RISK_PER_TRADE = 0.02   # 2% of equity risked per trade
+ATR_STOP_MULT = 1.5     # stop = entry - ATR * multiplier
+ATR_TARGET_MULT = 3.75  # target = entry + ATR * multiplier (2.5:1 R:R)
+ATR_PERIOD = 14
+
+# Daily trading discipline — always active
+MIN_DAILY_ENTRIES = 2       # enter at least this many plays per trading day
+MIN_DEPLOYED_PCT  = 0.25    # keep at least 25% of equity in open positions at all times
+# When market is open and deployed < MIN_DEPLOYED_PCT, bot re-scans immediately
+# When daily entries < MIN_DAILY_ENTRIES by midday, threshold drops to MIN_SCORE_FORCED
+SCAN_SYMBOLS_DEFAULT = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD",
+    "JPM", "GS", "BAC", "MS", "V", "MA",
+    "XOM", "CVX", "SLB", "COP",
+    "EQIX", "AMT", "PLD",
+    "NUE", "CAT", "URI", "HON",
+    "TXN", "AVGO", "QCOM",
+    "UNH", "LLY", "JNJ", "ABBV",
+    "COIN", "IPGP", "PLTR", "MSTR",
+    "SPY", "QQQ", "IWM",
+]
 
 
 # ======================================================================
@@ -41,10 +73,9 @@ _FEED_TIMEOUT_SEC = 120   # seconds before treating WebSocket as dropped
 # ======================================================================
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="regime-trader")
+    parser = argparse.ArgumentParser(prog="swing-trader")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # --- backtest subcommand ---
     bt = sub.add_parser("backtest", help="Walk-forward backtest or stress test")
     bt.add_argument("--symbols", nargs="+", default=["SPY"])
     bt.add_argument("--start", default="2019-01-01")
@@ -54,15 +85,13 @@ def parse_args() -> argparse.Namespace:
     bt.add_argument("--output-dir", default="results")
     bt.add_argument("--config", default="config/settings.yaml")
 
-    # --- live subcommand ---
-    live = sub.add_parser("live", help="Live / paper trading loop")
-    live.add_argument("--paper", action="store_true", help="Use paper trading account")
+    live = sub.add_parser("live", help="Autonomous swing trading loop")
+    live.add_argument("--paper", action="store_true")
     live.add_argument("--dry-run", action="store_true",
                       help="Full pipeline, no orders submitted")
-    live.add_argument("--train-only", action="store_true",
-                      help="Train HMM model and exit")
-    live.add_argument("--dashboard", action="store_true",
-                      help="Show dashboard for a running live instance")
+    live.add_argument("--scan-only", action="store_true",
+                      help="Run one scan, print results, exit")
+    live.add_argument("--dashboard", action="store_true")
     live.add_argument("--config", default="config/settings.yaml")
 
     return parser.parse_args()
@@ -87,16 +116,10 @@ def load_credentials() -> dict:
 
 
 # ======================================================================
-# Shared data fetch helper (used by backtest + live startup)
+# Backtest runners (unchanged from prior version)
 # ======================================================================
 
-def _fetch_price_data(
-    symbols: list,
-    start: str,
-    end: str,
-    credentials: dict,
-    config: dict,
-) -> Dict:
+def _fetch_price_data(symbols, start, end, credentials, config) -> Dict:
     from broker.alpaca_client import AlpacaClient
     from data.market_data import MarketDataFetcher
 
@@ -111,17 +134,11 @@ def _fetch_price_data(
     return fetcher.fetch_historical(symbols, timeframe, start, end)
 
 
-# ======================================================================
-# Backtest / stress-test runners (Phase 4 — unchanged)
-# ======================================================================
-
-def run_backtest(args: argparse.Namespace, config: dict, credentials: dict) -> None:
+def run_backtest(args, config, credentials) -> None:
     from backtest.backtester import WalkForwardBacktester
     from backtest.performance import PerformanceAnalyzer
 
-    price_data = _fetch_price_data(
-        args.symbols, args.start, args.end, credentials, config
-    )
+    price_data = _fetch_price_data(args.symbols, args.start, args.end, credentials, config)
     backtester = WalkForwardBacktester(config)
     result = backtester.run(price_data, symbols=args.symbols)
 
@@ -133,16 +150,14 @@ def run_backtest(args: argparse.Namespace, config: dict, credentials: dict) -> N
     analyzer.save_csvs(result, Path(args.output_dir))
 
 
-def run_stress_test(args: argparse.Namespace, config: dict, credentials: dict) -> None:
+def run_stress_test(args, config, credentials) -> None:
     from backtest.backtester import WalkForwardBacktester
     from backtest.stress_test import StressTest
     from rich.console import Console
     from rich.table import Table
 
     console = Console()
-    price_data = _fetch_price_data(
-        args.symbols, "2015-01-01", args.end, credentials, config
-    )
+    price_data = _fetch_price_data(args.symbols, "2015-01-01", args.end, credentials, config)
     backtester = WalkForwardBacktester(config)
     stress = StressTest(config)
     results = stress.run_all(price_data, backtester)
@@ -167,62 +182,10 @@ def run_stress_test(args: argparse.Namespace, config: dict, credentials: dict) -
 
 
 # ======================================================================
-# Train-only runner
+# Dashboard viewer
 # ======================================================================
 
-def run_train_only(args: argparse.Namespace, config: dict, credentials: dict) -> None:
-    """Fetch historical data, train HMM, save model, print results, exit."""
-    from core.hmm_engine import HMMEngine
-    from data.feature_engineering import FeatureEngineer
-
-    _MODELS_DIR.mkdir(exist_ok=True)
-    symbols = config["broker"].get("symbols", ["SPY"])
-    primary = symbols[0]
-    timeframe = config["broker"].get("timeframe", "1Day")
-
-    logger.info("Training HMM for %s (%s)…", primary, timeframe)
-    end = datetime.now().strftime("%Y-%m-%d")
-    start = (datetime.now() - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
-
-    price_data = _fetch_price_data([primary], start, end, credentials, config)
-    bars = price_data[primary].rename(columns=str.lower)
-
-    fe = FeatureEngineer()
-    features_df = fe.build_hmm_features(bars)
-    log_rets = np.log(bars["close"] / bars["close"].shift(1)).dropna()
-    features_df, log_rets = features_df.align(log_rets, join="inner", axis=0)
-
-    hmm_cfg = config.get("hmm", {})
-    engine = HMMEngine(
-        n_candidates=hmm_cfg.get("n_candidates", [3, 4, 5, 6, 7]),
-        n_init=hmm_cfg.get("n_init", 5),
-        stability_bars=hmm_cfg.get("stability_bars", 3),
-        flicker_window=hmm_cfg.get("flicker_window", 20),
-        flicker_threshold=hmm_cfg.get("flicker_threshold", 4),
-        min_confidence=hmm_cfg.get("min_confidence", 0.55),
-    )
-    engine.fit(features_df.values, log_rets.values)
-
-    model_path = _MODELS_DIR / f"hmm_{primary}_{timeframe}.pkl"
-    engine.save(model_path)
-
-    print(f"\nHMM trained and saved to {model_path}")
-    print(f"  n_regimes: {engine.n_regimes}  BIC: {engine.bic:.2f}")
-    print(f"  Labels: {engine.regime_labels}")
-    for rid, info in engine.regime_info.items():
-        print(
-            f"  [{rid}] {info.regime_name:15s}  "
-            f"ret={info.expected_return*100:.3f}%  "
-            f"vol={info.expected_volatility*100:.1f}%  "
-            f"strategy={info.recommended_strategy_type}"
-        )
-
-
-# ======================================================================
-# Dashboard viewer (reads live_state.json written by the live loop)
-# ======================================================================
-
-def run_dashboard(args: argparse.Namespace, config: dict) -> None:
+def run_dashboard(args, config) -> None:
     from rich.console import Console
     from rich.live import Live
 
@@ -249,29 +212,42 @@ def run_dashboard(args: argparse.Namespace, config: dict) -> None:
 
 
 # ======================================================================
-# LiveTrader — Phase 7 main loop
+# ATR helper
 # ======================================================================
 
-class LiveTrader:
+def _compute_atr(bars: pd.DataFrame, period: int = ATR_PERIOD) -> float:
+    tr = pd.concat([
+        bars["high"] - bars["low"],
+        (bars["high"] - bars["close"].shift()).abs(),
+        (bars["low"] - bars["close"].shift()).abs(),
+    ], axis=1).max(axis=1)
+    return float(tr.ewm(span=period, adjust=False).mean().iloc[-1])
+
+
+# ======================================================================
+# SwingTrader — autonomous main loop
+# ======================================================================
+
+class SwingTrader:
     """
-    Orchestrates startup, the bar-by-bar main loop, and clean shutdown.
+    Autonomous swing trader. Scans for technical setups every trading day
+    at open, enters qualifying plays with bracket orders, and lets stops
+    and targets handle all exits. No regime detection, no manual triggers.
 
-    Startup sequence (8 steps):
-      1. Connect to Alpaca, verify account
-      2. Check market hours
-      3. Load or train HMM (retrain if > 7 days old)
-      4. Initialize risk manager from live portfolio
-      5. Initialize position tracker, sync positions
-      6. Load state_snapshot.json if present
-      7. Start WebSocket data feeds
-      8. Log "System online"
+    Entry logic (run once per trading day):
+      1. Fetch 90-day OHLCV for every symbol in the universe
+      2. Score each symbol with the opportunity scanner (0–100)
+      3. For symbols scoring ≥65 with an active signal:
+         - Compute ATR(14)
+         - stop  = current_price - ATR * 1.5
+         - target = current_price + ATR * 3.75  (2.5:1 R:R)
+         - shares = floor((equity * 0.02) / (ATR * 1.5))
+         - Submit bracket order
+      4. Skip if already in position or max plays reached (15)
 
-    Main loop (each bar):
-      1-7: features → HMM → regime → signals → risk validate → orders
-      8: trailing stop updates
-      9: circuit breaker check
-      10: dashboard refresh
-      11: weekly HMM retrain if needed
+    Exit logic (continuous, via bracket orders placed at entry):
+      - Alpaca handles stop and target fills automatically
+      - Trailing stop tightened on each bar if ATR-based level improves
     """
 
     def __init__(self, config: dict, credentials: dict, dry_run: bool = False) -> None:
@@ -285,17 +261,12 @@ class LiveTrader:
         # Components — initialized in startup()
         self._client = None
         self._fetcher = None
-        self._engine = None
-        self._orchestrator = None
         self._risk_manager = None
         self._position_tracker = None
         self._order_executor = None
-        self._feature_engineer = None
 
-        # Rolling bar history: {symbol: DataFrame}
+        # Bar history: {symbol: DataFrame}
         self._bar_history: Dict[str, pd.DataFrame] = {}
-        self._features_df: Optional[pd.DataFrame] = None
-        self._first_inference: bool = True
 
         # P&L tracking
         self._session_start_equity: float = 0.0
@@ -304,40 +275,36 @@ class LiveTrader:
         self._prev_day: Optional[tuple] = None
         self._prev_week: Optional[tuple] = None
 
-        # Order tracking: symbol → OrderRecord (for stop modification)
+        # Order tracking: symbol → OrderRecord
         self._open_order_records: Dict[str, object] = {}
 
         # Session metadata
         self._session_start: datetime = datetime.utcnow()
         self._bar_count: int = 0
         self._order_count: int = 0
-        self._last_regime: str = "UNKNOWN"
         self._daily_trade_count: int = 0
-        self._recent_signals: List[dict] = []
+        self._daily_entries: int = 0        # new entries opened today
+        self._last_scan_day: Optional[tuple] = None
+        self._last_deployment_check: Optional[tuple] = None  # (day, hour)
+        self._scan_results: List[dict] = []
+        self._recent_entries: List[dict] = []
+
+        self._symbols = config.get("swing", {}).get("universe", SCAN_SYMBOLS_DEFAULT)
+        self._timeframe = config["broker"].get("timeframe", "1Day")
 
     # ------------------------------------------------------------------
     # Startup
     # ------------------------------------------------------------------
 
     def startup(self) -> None:
-        _MODELS_DIR.mkdir(exist_ok=True)
         from broker.alpaca_client import AlpacaClient
         from broker.order_executor import OrderExecutor
         from broker.position_tracker import PositionTracker
-        from core.hmm_engine import HMMEngine
-        from core.regime_strategies import StrategyOrchestrator
         from core.risk_manager import RiskManager
-        from data.feature_engineering import FeatureEngineer
         from data.market_data import MarketDataFetcher
 
-        symbols = self.config["broker"].get("symbols", ["SPY"])
-        timeframe = self.config["broker"].get("timeframe", "1Day")
-        self._symbols = symbols
-        self._primary = symbols[0]
-        self._timeframe = timeframe
-        self._feature_engineer = FeatureEngineer()
+        logger.info("SwingTrader starting up — autonomous mode")
 
-        # 1. Connect to Alpaca
         logger.info("Step 1: Connecting to Alpaca…")
         self._client = AlpacaClient(
             api_key=self.credentials["alpaca_api_key"],
@@ -346,72 +313,49 @@ class LiveTrader:
         )
         self._client.connect()
         acct = self._client.get_account()
-        logger.info("Account verified: equity=$%s status=%s", acct["equity"], acct["status"])
+        logger.info("Account: equity=$%s status=%s", acct["equity"], acct["status"])
 
-        # 2. Check market hours
         logger.info("Step 2: Checking market hours…")
         clock = self._client.get_clock()
         if not clock["is_open"]:
-            logger.info(
-                "Market closed. Next open: %s. Continuing in paper/dry-run mode.",
-                clock["next_open"],
-            )
+            logger.info("Market closed. Next open: %s", clock["next_open"])
 
-        # 3. Load or train HMM
-        logger.info("Step 3: Loading or training HMM…")
+        logger.info("Step 3: Initializing components…")
         self._fetcher = MarketDataFetcher(self._client)
-        self._engine = self._load_or_train_hmm()
-        self._orchestrator = StrategyOrchestrator(self.config, self._engine.regime_info)
-
-        # 4. Initialize risk manager
-        logger.info("Step 4: Initializing risk manager…")
         self._risk_manager = RiskManager(self.config)
-
-        # 5. Initialize position tracker, sync
-        logger.info("Step 5: Syncing positions…")
         self._position_tracker = PositionTracker(self._client)
         self._order_executor = OrderExecutor(self._client)
-        current_regime = self._engine.regime_labels[0] if self._engine.regime_labels else "UNKNOWN"
-        self._position_tracker.sync_with_alpaca(current_regime=current_regime)
+        self._position_tracker.sync_with_alpaca(current_regime="SWING")
+        self._position_tracker.start_stream()
+        self._position_tracker.register_fill_callback(self._on_fill)
 
-        # 6. Recover from state_snapshot if present
-        logger.info("Step 6: Checking for state snapshot…")
-        self._load_state()
-
-        # Seed bar history with enough historical data for feature computation
+        logger.info("Step 4: Loading bar history for universe…")
         end = datetime.now().strftime("%Y-%m-%d")
-        lookback_days = max(365 * 3, self._engine.MIN_TRAIN_BARS + 300)
-        start = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-        logger.info("Loading historical bars for feature window…")
-        for sym in symbols:
-            df = self._fetcher.get_historical_bars(sym, timeframe, start, end)
-            if not df.empty:
-                self._bar_history[sym] = df
-                logger.info("  %s: %d bars loaded", sym, len(df))
+        start = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+        for sym in self._symbols:
+            try:
+                df = self._fetcher.get_historical_bars(sym, self._timeframe, start, end)
+                if not df.empty:
+                    self._bar_history[sym] = df
+            except Exception as exc:
+                logger.warning("Could not load history for %s: %s", sym, exc)
+        logger.info("Loaded history for %d/%d symbols", len(self._bar_history), len(self._symbols))
 
-        # Compute initial features and run full forward pass
-        self._rebuild_features()
-        if self._features_df is not None and len(self._features_df) > 0:
-            self._run_full_inference()
-
-        # Seed equity tracking
         equity = float(self._client.get_account()["equity"])
         self._session_start_equity = equity
         self._day_open_equity = equity
         self._week_open_equity = equity
 
-        # 7. Start WebSocket data feeds
-        logger.info("Step 7: Starting WebSocket data feeds…")
-        self._fetcher.subscribe_bars(symbols, timeframe, self._on_bar)
-        self._position_tracker.start_stream()
-        self._position_tracker.register_fill_callback(self._on_fill)
+        logger.info("Step 5: Starting WebSocket data feeds…")
+        self._fetcher.subscribe_bars(self._symbols, self._timeframe, self._on_bar)
 
-        # Register shutdown handlers
         signal_module.signal(signal_module.SIGINT, self._shutdown_handler)
         signal_module.signal(signal_module.SIGTERM, self._shutdown_handler)
 
-        # 8. System online
-        logger.info("Step 8: System online. dry_run=%s", self.dry_run)
+        logger.info("Step 6: Running initial scan…")
+        self._scan_and_enter()
+
+        logger.info("System online — bot is making plays autonomously. dry_run=%s", self.dry_run)
         self._save_live_state()
 
     # ------------------------------------------------------------------
@@ -426,10 +370,7 @@ class LiveTrader:
                 try:
                     bar_dict = self._bar_queue.get(timeout=_FEED_TIMEOUT_SEC)
                 except queue.Empty:
-                    logger.warning(
-                        "Data feed timeout (%ds) — pausing signals, stops remain active.",
-                        _FEED_TIMEOUT_SEC,
-                    )
+                    logger.warning("Data feed timeout (%ds) — waiting for next bar.", _FEED_TIMEOUT_SEC)
                     live.update(self._build_dashboard())
                     continue
 
@@ -439,7 +380,6 @@ class LiveTrader:
                     logger.error("Unhandled error in process_bar: %s", exc)
                     logger.debug(traceback.format_exc())
                     self._save_state()
-                    # Continue — don't crash the loop on a single bad bar
 
                 live.update(self._build_dashboard())
 
@@ -448,25 +388,9 @@ class LiveTrader:
     # ------------------------------------------------------------------
 
     def shutdown(self) -> None:
-        logger.info("Shutting down…")
-
-        # Close WebSocket connections
-        try:
-            if self._fetcher:
-                pass  # Streams are daemon threads — they exit with the process
-        except Exception:
-            pass
-
-        # Do NOT close positions — stops remain in place
-        logger.info("Positions left open with stops in place.")
-
-        # Save state snapshot
+        logger.info("Shutting down — positions left open with stops in place.")
         self._save_state()
-
-        # Print session summary
         self._print_session_summary()
-
-        # Clean up live state file
         if _LIVE_STATE_FILE.exists():
             try:
                 _LIVE_STATE_FILE.unlink()
@@ -474,345 +398,264 @@ class LiveTrader:
                 pass
 
     def _shutdown_handler(self, signum, frame) -> None:
-        logger.info("Signal %s received — initiating shutdown.", signum)
+        logger.info("Signal %s received — shutting down.", signum)
         self._shutdown_event.set()
 
     # ------------------------------------------------------------------
-    # Bar processing (main loop body)
+    # Bar ingestion
     # ------------------------------------------------------------------
 
     def _on_bar(self, bar_dict: dict) -> None:
-        """WebSocket callback — enqueue bar for processing in main thread."""
         self._bar_queue.put(bar_dict)
 
     def _on_fill(self, symbol: str, fill_price: float, fill_qty: float, side: str) -> None:
-        """Position tracker fill callback — update equity tracking."""
-        logger.info("Fill callback: %s %s x%.2f @ $%.2f", side, symbol, fill_qty, fill_price)
+        logger.info("Fill: %s %s x%.2f @ $%.2f", side, symbol, fill_qty, fill_price)
         self._daily_trade_count += 1
         self._order_count += 1
 
     def _process_bar(self, bar_dict: dict) -> None:
-        sym = bar_dict.get("symbol", self._primary)
+        sym = bar_dict.get("symbol", self._symbols[0])
         bar_ts = pd.Timestamp(bar_dict["timestamp"])
-
         self._bar_count += 1
 
-        # Append bar to history
+        # Append bar to rolling history
         new_row = pd.DataFrame(
-            [{
-                "open": bar_dict["open"],
-                "high": bar_dict["high"],
-                "low": bar_dict["low"],
-                "close": bar_dict["close"],
-                "volume": bar_dict["volume"],
-            }],
+            [{"open": bar_dict["open"], "high": bar_dict["high"],
+              "low": bar_dict["low"], "close": bar_dict["close"],
+              "volume": bar_dict["volume"]}],
             index=[bar_ts],
         )
         if sym in self._bar_history:
-            self._bar_history[sym] = pd.concat(
-                [self._bar_history[sym], new_row]
-            ).tail(3000)  # cap memory
+            self._bar_history[sym] = pd.concat([self._bar_history[sym], new_row]).tail(500)
         else:
             self._bar_history[sym] = new_row
 
-        # Day / week boundary resets
         self._check_day_week_boundaries(bar_ts)
 
-        # --- 2. Compute features (rolling window, no future data) ---
-        self._rebuild_features()
-        if self._features_df is None or len(self._features_df) < 30:
-            return
+        # Once per trading day: scan for new swing setups and enter plays
+        bar_day = (bar_ts.year, bar_ts.month, bar_ts.day)
+        if self._last_scan_day != bar_day:
+            self._last_scan_day = bar_day
+            logger.info("New trading day (%s-%s-%s) — running swing scan.", *bar_day)
+            self._scan_and_enter()
 
-        # --- 3 & 4. Filtered HMM prediction + stability filter ---
-        try:
-            if self._first_inference:
-                self._run_full_inference()
-                self._first_inference = False
-                label_idx = self._last_label_idx
-                proba = self._last_proba
-            else:
-                new_obs = self._features_df.iloc[-1].values
-                label_idx, proba = self._engine.predict_regime_filtered_incremental(new_obs)
-            regime_state = self._engine.update_stability_filter(label_idx, proba)
-        except Exception as exc:
-            logger.warning("HMM error — holding current regime: %s", exc)
-            return
+        # Update trailing stops on every bar
+        self._update_trailing_stops()
 
-        self._last_regime = regime_state.label
+        # Deployment check — if < 25% of equity deployed, scan immediately
+        check_key = (bar_ts.year, bar_ts.month, bar_ts.day, bar_ts.hour)
+        if self._last_deployment_check != check_key:
+            self._last_deployment_check = check_key
+            try:
+                acct_tmp = self._with_retry(self._client.get_account)
+                eq_tmp   = float(acct_tmp["equity"])
+                bp_tmp   = float(acct_tmp.get("buying_power", eq_tmp))
+                # buying_power on a margin account ≈ 2× undeployed cash
+                # deployed ≈ (equity - cash) / equity
+                cash_tmp    = float(acct_tmp.get("cash", 0))
+                deployed_pct = max(0.0, (eq_tmp - max(0, cash_tmp)) / eq_tmp) if eq_tmp > 0 else 0
+                n_pos = len(self._position_tracker.get_all_positions())
+                if deployed_pct < MIN_DEPLOYED_PCT and n_pos < MAX_POSITIONS:
+                    logger.info(
+                        "Deployed %.1f%% < %.0f%% target — triggering extra scan.",
+                        deployed_pct * 100, MIN_DEPLOYED_PCT * 100,
+                    )
+                    self._scan_and_enter()
+            except Exception as exc:
+                logger.debug("Deployment check failed: %s", exc)
 
-        # --- 5. Flicker rate ---
-        is_flickering = self._engine.is_flickering()
-
-        # --- 6. Strategy: target allocation per symbol ---
-        signals = self._orchestrator.generate_signals(
-            self._symbols, self._bar_history, regime_state, is_flickering
-        )
-
-        # --- 7. Risk validation and order execution ---
+        # Circuit breaker
         acct = self._with_retry(self._client.get_account)
         equity = float(acct["equity"])
-        portfolio_state = self._build_portfolio_state(equity, regime_state)
-
         self._risk_manager.update_circuit_breakers(
             equity,
             equity - self._day_open_equity,
             equity - self._week_open_equity,
-            regime_state.label,
+            "SWING",
         )
-
-        for signal in signals:
-            decision = self._risk_manager.validate_signal(signal, portfolio_state)
-            sig_log = {
-                "ts": bar_ts.isoformat(),
-                "symbol": signal.symbol,
-                "direction": signal.direction,
-                "regime": regime_state.label,
-                "approved": decision.approved,
-                "reason": decision.rejection_reason or "",
-                "mods": decision.modifications,
-            }
-            self._recent_signals = (self._recent_signals + [sig_log])[-20:]
-
-            if decision.approved and decision.modified_signal is not None:
-                final = decision.modified_signal
-                if decision.modifications:
-                    logger.info("Signal modified: %s", "; ".join(decision.modifications))
-
-                if final.direction == "FLAT":
-                    pos = self._position_tracker.get_position(final.symbol)
-                    if pos and not self.dry_run:
-                        self._order_executor.close_position(final.symbol)
-                else:
-                    self._execute_long(final)
-            else:
-                if decision.rejection_reason:
-                    logger.info("Signal rejected: %s", decision.rejection_reason)
-
-        # --- 8. Update trailing stops ---
-        self._update_trailing_stops(regime_state.label)
-
-        # --- 9. Circuit breaker check ---
         cb_status = self._risk_manager.circuit_breaker.status
-        if cb_status in ("halt_daily", "halt_weekly", "halt_peak"):
-            logger.warning("CIRCUIT BREAKER HALT: %s", cb_status)
+        if cb_status not in ("normal", "ok"):
+            logger.warning("CIRCUIT BREAKER: %s — skipping new entries.", cb_status)
 
-        # --- 10. Save live state for dashboard ---
         self._save_live_state()
 
-        # --- 11. Weekly HMM retrain ---
-        self._check_weekly_retrain()
-
     # ------------------------------------------------------------------
-    # Order execution
+    # Core: scan and autonomously enter plays
     # ------------------------------------------------------------------
 
-    def _execute_long(self, signal) -> None:
-        """Submit a bracket order for a LONG signal, respecting rebalance threshold."""
-        pos = self._position_tracker.get_position(signal.symbol)
-        acct_info = self._with_retry(self._client.get_account)
-        equity = float(acct_info["equity"])
-        target_alloc = signal.position_size_pct * signal.leverage
+    def _scan_and_enter(self) -> None:
+        """
+        Score the full universe, rank by composite score, and submit bracket
+        orders for every qualifying setup the bot doesn't already hold.
+        """
+        from core.opportunity_scanner import score_symbol
 
-        if pos is not None:
-            current_alloc = (pos.qty * pos.current_price) / equity if equity > 0 else 0.0
-            if abs(target_alloc - current_alloc) < self.config.get("strategy", {}).get(
-                "rebalance_threshold", 0.10
-            ):
-                return  # drift within threshold, no trade needed
+        cb_status = (
+            self._risk_manager.circuit_breaker.status
+            if self._risk_manager else "normal"
+        )
+        if cb_status not in ("normal", "ok"):
+            logger.info("Circuit breaker active (%s) — skipping scan.", cb_status)
+            return
+
+        acct = self._with_retry(self._client.get_account)
+        equity = float(acct["equity"])
+        open_positions = set(self._position_tracker.get_all_positions().keys())
+        n_open = len(open_positions)
+
+        if n_open >= MAX_POSITIONS:
+            logger.info("Max positions reached (%d/%d) — skipping scan.", n_open, MAX_POSITIONS)
+            return
+
+        # Decide score threshold — lower it if we haven't hit daily minimum by midday
+        now_et_hour = (datetime.utcnow().hour - 4) % 24  # rough ET hour
+        needs_entries = self._daily_entries < MIN_DAILY_ENTRIES
+        past_midday   = now_et_hour >= 12
+        threshold = MIN_SCORE_FORCED if (needs_entries and past_midday) else MIN_SCORE
+        if threshold < MIN_SCORE:
+            logger.info(
+                "Daily minimum not met (%d/%d entries) — lowering threshold to %d",
+                self._daily_entries, MIN_DAILY_ENTRIES, threshold,
+            )
+
+        # Score every symbol we have bars for
+        scored: List[dict] = []
+        for sym, bars in self._bar_history.items():
+            if len(bars) < 50:
+                continue
+            try:
+                result = score_symbol(bars, sym)
+                if result:
+                    scored.append(result)
+            except Exception as exc:
+                logger.debug("score_symbol failed for %s: %s", sym, exc)
+
+        # Rank by composite score descending
+        scored.sort(key=lambda x: x.get("score", 0), reverse=True)
+        self._scan_results = scored[:20]  # store top 20 for dashboard
+
+        candidates = [
+            r for r in scored
+            if r.get("score", 0) >= threshold
+            and r.get("firing_signals")
+            and r["symbol"] not in open_positions
+        ]
+
+        slots_available = MAX_POSITIONS - n_open
+        logger.info(
+            "Scan complete: %d symbols scored, %d qualify, %d slots open",
+            len(scored), len(candidates), slots_available,
+        )
+
+        for candidate in candidates[:slots_available]:
+            self._enter_play(candidate, equity)
+
+    def _enter_play(self, candidate: dict, equity: float) -> None:
+        """Submit a bracket order for a qualifying swing setup."""
+        sym = candidate["symbol"]
+        bars = self._bar_history.get(sym)
+        if bars is None or len(bars) < ATR_PERIOD + 2:
+            logger.warning("Not enough bars for %s — skipping.", sym)
+            return
+
+        price = float(bars["close"].iloc[-1])
+        atr = _compute_atr(bars)
+        if atr <= 0:
+            return
+
+        stop = round(price - atr * ATR_STOP_MULT, 2)
+        target = round(price + atr * ATR_TARGET_MULT, 2)
+        risk_per_share = price - stop
+        if risk_per_share <= 0:
+            return
+
+        shares = int((equity * RISK_PER_TRADE) / risk_per_share)
+        if shares < 1:
+            logger.info("Position too small for %s (equity=%.0f, risk/share=%.2f) — skipping.",
+                        sym, equity, risk_per_share)
+            return
+
+        signals = candidate.get("firing_signals", [])
+        score = candidate.get("score", 0)
+
+        log_entry = {
+            "ts": datetime.utcnow().isoformat(),
+            "symbol": sym,
+            "score": score,
+            "signals": signals,
+            "entry": price,
+            "stop": stop,
+            "target": target,
+            "shares": shares,
+            "atr": round(atr, 4),
+        }
 
         if self.dry_run:
             logger.info(
-                "[DRY-RUN] Would submit bracket: %s LONG %.0f%% @ $%.2f stop=$%.2f",
-                signal.symbol,
-                signal.position_size_pct * 100,
-                signal.entry_price,
-                signal.stop_loss,
+                "[DRY-RUN] Would enter %s: score=%d signals=%s "
+                "%d shares @ $%.2f  stop=$%.2f  target=$%.2f",
+                sym, score, signals, shares, price, stop, target,
             )
+            self._recent_entries = (self._recent_entries + [log_entry])[-20:]
             return
 
         try:
+            from core.regime_strategies import Signal
+            signal = Signal(
+                symbol=sym,
+                direction="LONG",
+                confidence=score / 100.0,
+                entry_price=price,
+                stop_loss=stop,
+                take_profit=target,
+                position_size_pct=shares * price / equity,
+                leverage=1.0,
+                regime_id=0,
+                regime_name="SWING",
+                regime_probability=1.0,
+                timestamp=datetime.utcnow(),
+                reasoning=f"swing score={score} signals={signals}",
+                strategy_name=signals[0] if signals else "composite",
+            )
             record = self._order_executor.submit_bracket_order(signal)
-            self._open_order_records[signal.symbol] = record
-            self._position_tracker.set_entry_regime(signal.symbol, signal.regime_name)
-            self._position_tracker.set_stop(signal.symbol, signal.stop_loss)
+            self._open_order_records[sym] = record
+            self._position_tracker.set_entry_regime(sym, "SWING")
+            self._position_tracker.set_stop(sym, stop)
+            self._recent_entries = (self._recent_entries + [log_entry])[-20:]
+            self._daily_entries += 1
             logger.info(
-                "Bracket order submitted: %s [trade_id=%s]",
-                signal.symbol, record.trade_id,
+                "Entered %s: score=%d signals=%s  %d sh @ $%.2f  "
+                "stop=$%.2f  target=$%.2f  [trade_id=%s]",
+                sym, score, signals, shares, price, stop, target, record.trade_id,
             )
         except Exception as exc:
-            logger.error("submit_bracket_order failed for %s: %s", signal.symbol, exc)
+            logger.error("Failed to enter %s: %s", sym, exc)
 
     # ------------------------------------------------------------------
-    # Trailing stop updates
+    # Trailing stop management
     # ------------------------------------------------------------------
 
-    def _update_trailing_stops(self, regime_name: str) -> None:
-        """
-        Compute ATR-based trailing stops per regime and tighten if better.
-          LowVolBull:         2.0 × ATR(14)
-          MidVolCautious:     1.5 × ATR(14)
-          HighVolDefensive:   1.0 × ATR(14)
-        """
-        bars = self._bar_history.get(self._primary)
-        if bars is None or len(bars) < 15:
-            return
-
-        tr = pd.concat([
-            bars["high"] - bars["low"],
-            (bars["high"] - bars["close"].shift()).abs(),
-            (bars["low"] - bars["close"].shift()).abs(),
-        ], axis=1).max(axis=1)
-        atr = float(tr.ewm(span=14, adjust=False).mean().iloc[-1])
-
-        if "BULL" in regime_name or "EUPHORIA" in regime_name:
-            multiplier = 2.0
-        elif "BEAR" in regime_name or "CRASH" in regime_name:
-            multiplier = 1.0
-        else:
-            multiplier = 1.5
-
-        trail_dist = atr * multiplier
-
+    def _update_trailing_stops(self) -> None:
+        """Tighten ATR-based trailing stops for all open positions."""
         for sym, pos in self._position_tracker.get_all_positions().items():
-            new_stop = round(pos.current_price - trail_dist, 2)
-            if new_stop <= 0:
+            bars = self._bar_history.get(sym)
+            if bars is None or len(bars) < ATR_PERIOD + 2:
                 continue
-
-            record = self._open_order_records.get(sym)
-            if record and not self.dry_run:
-                tightened = self._order_executor.modify_stop(
-                    sym, record.order_id, new_stop
-                )
-                if tightened:
-                    self._position_tracker.set_stop(sym, new_stop)
-
-    # ------------------------------------------------------------------
-    # HMM training helpers
-    # ------------------------------------------------------------------
-
-    def _load_or_train_hmm(self):
-        from core.hmm_engine import HMMEngine
-
-        model_path = _MODELS_DIR / f"hmm_{self._primary}_{self._timeframe}.pkl"
-
-        if model_path.exists():
             try:
-                engine = HMMEngine.load(model_path)
-                age_days = (datetime.utcnow() - engine.training_date).days
-                if age_days <= _MODEL_MAX_AGE_DAYS:
-                    logger.info(
-                        "Loaded HMM from %s (age=%d days, n_regimes=%d)",
-                        model_path, age_days, engine.n_regimes,
-                    )
-                    return engine
-                logger.info(
-                    "HMM model is %d days old (> %d) — retraining.",
-                    age_days, _MODEL_MAX_AGE_DAYS,
-                )
+                atr = _compute_atr(bars)
+                new_stop = round(pos.current_price - atr * ATR_STOP_MULT, 2)
+                if new_stop <= 0:
+                    continue
+                record = self._open_order_records.get(sym)
+                if record and not self.dry_run:
+                    tightened = self._order_executor.modify_stop(sym, record.order_id, new_stop)
+                    if tightened:
+                        self._position_tracker.set_stop(sym, new_stop)
             except Exception as exc:
-                logger.warning("Failed to load HMM: %s — retraining.", exc)
-
-        return self._retrain_hmm()
-
-    def _retrain_hmm(self):
-        from core.hmm_engine import HMMEngine
-        from data.feature_engineering import FeatureEngineer
-
-        logger.info("Retraining HMM for %s…", self._primary)
-        end = datetime.now().strftime("%Y-%m-%d")
-        start = (datetime.now() - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
-        bars = self._fetcher.get_historical_bars(self._primary, self._timeframe, start, end)
-
-        if bars.empty:
-            raise RuntimeError("No historical bars available for HMM training.")
-
-        fe = FeatureEngineer()
-        features_df = fe.build_hmm_features(bars)
-        log_rets = np.log(bars["close"] / bars["close"].shift(1)).dropna()
-        features_df, log_rets = features_df.align(log_rets, join="inner", axis=0)
-
-        hmm_cfg = self.config.get("hmm", {})
-        engine = HMMEngine(
-            n_candidates=hmm_cfg.get("n_candidates", [3, 4, 5, 6, 7]),
-            n_init=hmm_cfg.get("n_init", 5),
-            stability_bars=hmm_cfg.get("stability_bars", 3),
-            flicker_window=hmm_cfg.get("flicker_window", 20),
-            flicker_threshold=hmm_cfg.get("flicker_threshold", 4),
-            min_confidence=hmm_cfg.get("min_confidence", 0.55),
-        )
-        engine.fit(features_df.values, log_rets.values)
-
-        model_path = _MODELS_DIR / f"hmm_{self._primary}_{self._timeframe}.pkl"
-        engine.save(model_path)
-        logger.info("HMM retrained and saved to %s (n_regimes=%d)", model_path, engine.n_regimes)
-        return engine
-
-    def _rebuild_features(self) -> None:
-        """Recompute features from current bar_history (no look-ahead)."""
-        bars = self._bar_history.get(self._primary)
-        if bars is None or len(bars) < 30:
-            return
-        try:
-            self._features_df = self._feature_engineer.build_hmm_features(bars)
-        except Exception as exc:
-            logger.warning("Feature rebuild failed: %s", exc)
-
-    def _run_full_inference(self) -> None:
-        """Full forward pass — used on startup and after HMM retrain."""
-        if self._features_df is None or len(self._features_df) == 0:
-            return
-        features = self._features_df.values
-        label_sequence = self._engine.predict_regime_filtered(features)
-        proba_matrix = self._engine.predict_regime_proba(features)
-        self._last_label_idx = int(label_sequence[-1])
-        self._last_proba = proba_matrix[-1]
-
-    def _check_weekly_retrain(self) -> None:
-        """Retrain HMM if >7 days have elapsed since last training."""
-        if self._engine is None or self._engine.training_date is None:
-            return
-        age_days = (datetime.utcnow() - self._engine.training_date).days
-        if age_days >= _MODEL_MAX_AGE_DAYS:
-            logger.info("Weekly HMM retrain triggered (age=%d days).", age_days)
-            try:
-                self._engine = self._retrain_hmm()
-                self._orchestrator.update_regime_infos(self._engine.regime_info)
-                self._first_inference = True  # force full forward pass next bar
-            except Exception as exc:
-                logger.error("Weekly retrain failed: %s — continuing with old model.", exc)
+                logger.debug("Trailing stop update failed for %s: %s", sym, exc)
 
     # ------------------------------------------------------------------
-    # Portfolio state assembly
-    # ------------------------------------------------------------------
-
-    def _build_portfolio_state(self, equity: float, regime_state) -> object:
-        from core.risk_manager import PortfolioState
-
-        positions_mv = {
-            sym: pos.qty * pos.current_price
-            for sym, pos in self._position_tracker.get_all_positions().items()
-        }
-        cash = equity - sum(positions_mv.values())
-
-        return PortfolioState(
-            equity=equity,
-            cash=cash,
-            buying_power=float(self._client.get_available_margin()),
-            positions=positions_mv,
-            daily_pnl=equity - self._day_open_equity,
-            weekly_pnl=equity - self._week_open_equity,
-            peak_equity=self._risk_manager.circuit_breaker._peak_equity or equity,
-            drawdown=self._risk_manager.circuit_breaker._peak_equity and
-                     (self._risk_manager.circuit_breaker._peak_equity - equity)
-                     / self._risk_manager.circuit_breaker._peak_equity or 0.0,
-            circuit_breaker_status=self._risk_manager.circuit_breaker.status,
-            flicker_rate=self._engine.get_regime_flicker_rate(),
-            open_position_count=self._position_tracker.open_position_count(),
-            daily_trade_count=self._daily_trade_count,
-        )
-
-    # ------------------------------------------------------------------
-    # Day / week boundary tracking
+    # Portfolio / state helpers
     # ------------------------------------------------------------------
 
     def _check_day_week_boundaries(self, bar_ts: pd.Timestamp) -> None:
@@ -828,6 +671,8 @@ class LiveTrader:
             equity = float(acct["equity"])
             self._day_open_equity = equity
             self._daily_trade_count = 0
+            self._daily_entries = 0
+            self._last_deployment_check = None
             self._risk_manager.circuit_breaker.reset_daily()
 
         if self._prev_week is not None and bar_week != self._prev_week:
@@ -839,20 +684,13 @@ class LiveTrader:
         self._prev_day = bar_day
         self._prev_week = bar_week
 
-    # ------------------------------------------------------------------
-    # State persistence
-    # ------------------------------------------------------------------
-
     def _save_state(self) -> None:
         state = {
-            "version": 1,
+            "version": 2,
             "session_start": self._session_start.isoformat(),
             "last_save": datetime.utcnow().isoformat(),
-            "peak_equity": self._risk_manager.circuit_breaker._peak_equity
-                           if self._risk_manager else 0.0,
             "day_open_equity": self._day_open_equity,
             "week_open_equity": self._week_open_equity,
-            "last_regime": self._last_regime,
             "circuit_breaker_status": (
                 self._risk_manager.circuit_breaker.status
                 if self._risk_manager else "normal"
@@ -862,28 +700,10 @@ class LiveTrader:
         }
         try:
             _STATE_FILE.write_text(json.dumps(state, indent=2))
-            logger.debug("State snapshot saved to %s", _STATE_FILE)
         except OSError as exc:
-            logger.warning("Could not save state snapshot: %s", exc)
-
-    def _load_state(self) -> None:
-        if not _STATE_FILE.exists():
-            return
-        try:
-            state = json.loads(_STATE_FILE.read_text())
-            self._last_regime = state.get("last_regime", "UNKNOWN")
-            self._day_open_equity = state.get("day_open_equity", 0.0)
-            self._week_open_equity = state.get("week_open_equity", 0.0)
-            self._daily_trade_count = state.get("daily_trade_count", 0)
-            logger.info(
-                "Recovered from state snapshot: regime=%s daily_trades=%d",
-                self._last_regime, self._daily_trade_count,
-            )
-        except Exception as exc:
-            logger.warning("Could not load state snapshot: %s", exc)
+            logger.warning("Could not save state: %s", exc)
 
     def _save_live_state(self) -> None:
-        """Write dashboard state for --dashboard viewer."""
         positions = {
             sym: {
                 "qty": pos.qty,
@@ -893,7 +713,6 @@ class LiveTrader:
                 "unrealized_pnl_pct": pos.unrealized_pnl_pct,
                 "stop_level": pos.stop_level,
                 "regime_at_entry": pos.regime_at_entry,
-                "regime_current": pos.regime_current,
                 "holding_period_minutes": pos.holding_period_minutes,
             }
             for sym, pos in self._position_tracker.get_all_positions().items()
@@ -901,15 +720,18 @@ class LiveTrader:
 
         state = {
             "last_update": datetime.utcnow().isoformat(),
-            "regime": self._last_regime,
+            "mode": "SWING_AUTO",
             "circuit_breaker": (
                 self._risk_manager.circuit_breaker.status
                 if self._risk_manager else "unknown"
             ),
             "dry_run": self.dry_run,
             "bar_count": self._bar_count,
+            "open_positions": len(positions),
+            "max_positions": MAX_POSITIONS,
             "positions": positions,
-            "recent_signals": self._recent_signals[-10:],
+            "top_scan": self._scan_results[:10],
+            "recent_entries": self._recent_entries[-10:],
         }
         try:
             _LIVE_STATE_FILE.write_text(json.dumps(state, indent=2))
@@ -917,14 +739,15 @@ class LiveTrader:
             pass
 
     # ------------------------------------------------------------------
-    # Dashboard rendering
+    # Dashboard (Rich terminal UI)
     # ------------------------------------------------------------------
 
     def _build_dashboard(self):
+        from rich.columns import Columns
+        from rich.console import Group
         from rich.panel import Panel
         from rich.table import Table
         from rich.text import Text
-        from rich.columns import Columns
 
         acct_info: dict = {}
         try:
@@ -933,80 +756,80 @@ class LiveTrader:
         except Exception:
             pass
 
-        equity = acct_info.get("equity", 0.0)
+        equity = float(acct_info.get("equity", 0.0))
         daily_pnl = equity - self._day_open_equity
-        weekly_pnl = equity - self._week_open_equity
         session_pnl = equity - self._session_start_equity
         cb_status = (
             self._risk_manager.circuit_breaker.status
             if self._risk_manager else "unknown"
         )
+        n_open = self._position_tracker.open_position_count() if self._position_tracker else 0
+        cb_color = "green" if cb_status in ("normal", "ok") else "red"
 
-        # --- Regime panel ---
-        regime_color = (
-            "red" if "BEAR" in self._last_regime or "CRASH" in self._last_regime
-            else "green" if "BULL" in self._last_regime or "EUPHORIA" in self._last_regime
-            else "yellow"
-        )
-        cb_color = "green" if cb_status == "normal" else "red"
-        regime_text = Text()
-        regime_text.append(f"  Regime: ", style="bold")
-        regime_text.append(f"{self._last_regime}\n", style=f"bold {regime_color}")
-        regime_text.append(f"  Circuit Breaker: ", style="bold")
-        regime_text.append(f"{cb_status}\n", style=f"bold {cb_color}")
-        regime_text.append(f"  Bars processed: {self._bar_count}\n")
-        regime_text.append(f"  Dry-run: {self.dry_run}\n")
-        regime_panel = Panel(regime_text, title="[bold cyan]Regime[/]", expand=False)
+        status_text = Text()
+        status_text.append("  Mode: ", style="bold")
+        status_text.append("SWING AUTO\n", style="bold cyan")
+        status_text.append("  Positions: ", style="bold")
+        status_text.append(f"{n_open}/{MAX_POSITIONS}\n",
+                           style="yellow" if n_open >= MAX_POSITIONS else "green")
+        status_text.append("  Circuit Breaker: ", style="bold")
+        status_text.append(f"{cb_status}\n", style=f"bold {cb_color}")
+        status_text.append(f"  Bars: {self._bar_count}  Dry-run: {self.dry_run}\n")
+        status_panel = Panel(status_text, title="[bold cyan]Status[/]", expand=False)
 
-        # --- Portfolio panel ---
         portfolio_text = Text()
         portfolio_text.append(f"  Equity:       ${equity:>12,.2f}\n")
-        portfolio_text.append(f"  Daily P&L:    ")
-        portfolio_text.append(
-            f"${daily_pnl:>+,.2f}\n",
-            style="green" if daily_pnl >= 0 else "red",
-        )
-        portfolio_text.append(f"  Weekly P&L:   ")
-        portfolio_text.append(
-            f"${weekly_pnl:>+,.2f}\n",
-            style="green" if weekly_pnl >= 0 else "red",
-        )
-        portfolio_text.append(f"  Session P&L:  ")
-        portfolio_text.append(
-            f"${session_pnl:>+,.2f}\n",
-            style="green" if session_pnl >= 0 else "red",
-        )
+        portfolio_text.append("  Daily P&L:    ")
+        portfolio_text.append(f"${daily_pnl:>+,.2f}\n", style="green" if daily_pnl >= 0 else "red")
+        portfolio_text.append("  Session P&L:  ")
+        portfolio_text.append(f"${session_pnl:>+,.2f}\n", style="green" if session_pnl >= 0 else "red")
         portfolio_text.append(f"  Orders today: {self._daily_trade_count}\n")
         portfolio_panel = Panel(portfolio_text, title="[bold cyan]Portfolio[/]", expand=False)
 
-        # --- Positions table ---
         pos_table = Table(show_header=True, header_style="bold blue")
         pos_table.add_column("Symbol")
-        pos_table.add_column("Qty", justify="right")
+        pos_table.add_column("Shares", justify="right")
         pos_table.add_column("Entry", justify="right")
         pos_table.add_column("Current", justify="right")
         pos_table.add_column("P&L", justify="right")
         pos_table.add_column("Stop", justify="right")
-        pos_table.add_column("Regime@Entry")
+        pos_table.add_column("Target", justify="right")
 
         if self._position_tracker:
             for sym, pos in self._position_tracker.get_all_positions().items():
                 pnl_style = "green" if pos.unrealized_pnl >= 0 else "red"
+                record = self._open_order_records.get(sym)
+                target_str = (
+                    f"${record.take_profit:.2f}" if record and hasattr(record, "take_profit")
+                    else "—"
+                )
                 pos_table.add_row(
                     sym,
-                    f"{pos.qty:.1f}",
+                    f"{pos.qty:.0f}",
                     f"${pos.entry_price:.2f}",
                     f"${pos.current_price:.2f}",
                     Text(f"${pos.unrealized_pnl:+,.2f}", style=pnl_style),
                     f"${pos.stop_level:.2f}",
-                    pos.regime_at_entry,
+                    target_str,
                 )
-        positions_panel = Panel(pos_table, title="[bold cyan]Positions[/]")
 
-        from rich.console import Group
+        scan_table = Table(show_header=True, header_style="bold magenta")
+        scan_table.add_column("Symbol")
+        scan_table.add_column("Score", justify="right")
+        scan_table.add_column("Signals")
+        for r in self._scan_results[:8]:
+            score = r.get("score", 0)
+            score_color = "green" if score >= MIN_SCORE else "yellow"
+            scan_table.add_row(
+                r.get("symbol", ""),
+                Text(str(score), style=score_color),
+                ", ".join(r.get("firing_signals", [])),
+            )
+
         return Group(
-            Columns([regime_panel, portfolio_panel], equal=True),
-            positions_panel,
+            Columns([status_panel, portfolio_panel], equal=True),
+            Panel(pos_table, title="[bold cyan]Open Plays[/]"),
+            Panel(scan_table, title="[bold cyan]Last Scan (top 8)[/]"),
         )
 
     # ------------------------------------------------------------------
@@ -1014,7 +837,6 @@ class LiveTrader:
     # ------------------------------------------------------------------
 
     def _with_retry(self, fn, *args, max_retries: int = 3, **kwargs):
-        """Call fn with up to max_retries attempts and exponential backoff."""
         delay = 1.0
         last_exc = None
         for attempt in range(max_retries):
@@ -1023,10 +845,8 @@ class LiveTrader:
             except Exception as exc:
                 last_exc = exc
                 if attempt < max_retries - 1:
-                    logger.warning(
-                        "Retry %d/%d for %s (%.1fs): %s",
-                        attempt + 1, max_retries, fn.__name__, delay, exc,
-                    )
+                    logger.warning("Retry %d/%d for %s: %s", attempt + 1, max_retries,
+                                   fn.__name__, exc)
                     time.sleep(delay)
                     delay *= 2
         raise last_exc
@@ -1042,7 +862,6 @@ class LiveTrader:
         console = Console()
         duration = datetime.utcnow() - self._session_start
         hours, rem = divmod(int(duration.total_seconds()), 3600)
-        mins = rem // 60
 
         equity = 0.0
         try:
@@ -1057,7 +876,8 @@ class LiveTrader:
         t = Table(title="Session Summary", header_style="bold")
         t.add_column("Metric")
         t.add_column("Value", justify="right")
-        t.add_row("Duration", f"{hours}h {mins}m")
+        t.add_row("Mode", "SWING AUTO")
+        t.add_row("Duration", f"{hours}h {rem // 60}m")
         t.add_row("Starting equity", f"${self._session_start_equity:,.2f}")
         t.add_row("Ending equity", f"${equity:,.2f}")
         t.add_row("Session P&L", f"${session_pnl:+,.2f} ({pnl_pct:+.2f}%)")
@@ -1067,89 +887,154 @@ class LiveTrader:
             self._position_tracker.open_position_count()
             if self._position_tracker else 0
         ))
-        t.add_row("CB status", (
-            self._risk_manager.circuit_breaker.status
-            if self._risk_manager else "unknown"
-        ))
         console.print(t)
 
 
 # ======================================================================
-# Dashboard state renderer (used by --dashboard mode)
+# Scan-only runner
+# ======================================================================
+
+def run_scan_only(config: dict, credentials: dict) -> None:
+    """Fetch bars, score the universe, and print results. Then exit."""
+    from broker.alpaca_client import AlpacaClient
+    from core.opportunity_scanner import score_symbol
+    from data.market_data import MarketDataFetcher
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    symbols = config.get("swing", {}).get("universe", SCAN_SYMBOLS_DEFAULT)
+
+    client = AlpacaClient(
+        api_key=credentials["alpaca_api_key"],
+        secret_key=credentials["alpaca_secret_key"],
+        paper=credentials["paper"],
+    )
+    client.connect()
+    fetcher = MarketDataFetcher(client)
+
+    end = datetime.now().strftime("%Y-%m-%d")
+    start = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+
+    console.print(f"[bold]Scanning {len(symbols)} symbols…[/]")
+    results = []
+    for sym in symbols:
+        try:
+            df = fetcher.get_historical_bars(sym, "1Day", start, end)
+            if df is not None and len(df) >= 50:
+                r = score_symbol(df, sym)
+                if r:
+                    results.append(r)
+        except Exception:
+            pass
+
+    results.sort(key=lambda x: x.get("score", 0), reverse=True)
+
+    t = Table(title="Swing Scan Results", header_style="bold magenta")
+    t.add_column("Symbol")
+    t.add_column("Score", justify="right")
+    t.add_column("Price", justify="right")
+    t.add_column("Signals")
+    t.add_column("Qualifies?")
+
+    for r in results:
+        score = r.get("score", 0)
+        qualifies = score >= MIN_SCORE and bool(r.get("firing_signals"))
+        t.add_row(
+            r.get("symbol", ""),
+            f"[green]{score}[/]" if score >= MIN_SCORE else str(score),
+            f"${r.get('price', 0):.2f}",
+            ", ".join(r.get("firing_signals", [])),
+            "[green]YES[/]" if qualifies else "[dim]no[/]",
+        )
+
+    console.print(t)
+    console.print(f"\n[bold]Qualifying plays (score ≥ {MIN_SCORE} with signal):[/] "
+                  f"{sum(1 for r in results if r.get('score', 0) >= MIN_SCORE and r.get('firing_signals'))}")
+
+
+# ======================================================================
+# Dashboard state renderer
 # ======================================================================
 
 def _build_dashboard_from_state(state: dict):
     from rich.columns import Columns
+    from rich.console import Group
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
 
     last_update = state.get("last_update", "unknown")
-    regime = state.get("regime", "UNKNOWN")
+    mode = state.get("mode", "SWING_AUTO")
     cb = state.get("circuit_breaker", "unknown")
-    bars = state.get("bar_count", 0)
+    n_open = state.get("open_positions", 0)
+    max_pos = state.get("max_positions", MAX_POSITIONS)
     dry_run = state.get("dry_run", False)
 
-    regime_color = (
-        "red" if "BEAR" in regime or "CRASH" in regime
-        else "green" if "BULL" in regime or "EUPHORIA" in regime
-        else "yellow"
-    )
     info = Text()
+    info.append(f"  Mode: {mode}\n")
     info.append(f"  Last update: {last_update}\n")
-    info.append(f"  Regime: ", style="bold")
-    info.append(f"{regime}\n", style=f"bold {regime_color}")
-    info.append(f"  Circuit Breaker: {cb}\n")
-    info.append(f"  Bars: {bars}   Dry-run: {dry_run}\n")
+    info.append(f"  Positions: {n_open}/{max_pos}    CB: {cb}    dry_run: {dry_run}\n")
     info_panel = Panel(info, title="[bold cyan]Live Instance[/]")
 
     pos_table = Table(show_header=True, header_style="bold blue")
     pos_table.add_column("Symbol")
-    pos_table.add_column("Qty", justify="right")
+    pos_table.add_column("Shares", justify="right")
     pos_table.add_column("Entry", justify="right")
     pos_table.add_column("Current", justify="right")
-    pos_table.add_column("Unreal P&L", justify="right")
+    pos_table.add_column("P&L", justify="right")
     pos_table.add_column("Stop", justify="right")
 
     for sym, pos in state.get("positions", {}).items():
         pnl = pos.get("unrealized_pnl", 0.0)
         pos_table.add_row(
             sym,
-            f"{pos.get('qty', 0):.1f}",
+            f"{pos.get('qty', 0):.0f}",
             f"${pos.get('entry_price', 0):.2f}",
             f"${pos.get('current_price', 0):.2f}",
             Text(f"${pnl:+,.2f}", style="green" if pnl >= 0 else "red"),
             f"${pos.get('stop_level', 0):.2f}",
         )
 
-    from rich.console import Group
+    scan_table = Table(show_header=True, header_style="bold magenta")
+    scan_table.add_column("Symbol")
+    scan_table.add_column("Score", justify="right")
+    scan_table.add_column("Signals")
+    for r in state.get("top_scan", [])[:8]:
+        score = r.get("score", 0)
+        scan_table.add_row(
+            r.get("symbol", ""),
+            f"[green]{score}[/]" if score >= MIN_SCORE else str(score),
+            ", ".join(r.get("firing_signals", [])),
+        )
+
     return Group(
         info_panel,
-        Panel(pos_table, title="[bold cyan]Positions[/]"),
+        Panel(pos_table, title="[bold cyan]Open Plays[/]"),
+        Panel(scan_table, title="[bold cyan]Last Scan[/]"),
     )
 
 
 # ======================================================================
-# Live runner (entry point for `python main.py live`)
+# Live runner
 # ======================================================================
 
-def run_live(args: argparse.Namespace, config: dict, credentials: dict) -> None:
-    """Instantiate and run the LiveTrader."""
-    trader = LiveTrader(config, credentials, dry_run=getattr(args, "dry_run", False))
+def run_live(args, config, credentials) -> None:
+    trader = SwingTrader(config, credentials, dry_run=getattr(args, "dry_run", False))
     try:
         trader.startup()
         trader.run()
     except KeyboardInterrupt:
         pass
     except Exception as exc:
-        logger.critical("Fatal error in live loop: %s", exc)
+        logger.critical("Fatal error: %s", exc)
         logger.debug(traceback.format_exc())
     finally:
         trader.shutdown()
 
 
 # ======================================================================
-# Main entry point
+# Entry point
 # ======================================================================
 
 def main() -> None:
@@ -1179,8 +1064,8 @@ def main() -> None:
     elif args.command == "live":
         if args.dashboard:
             run_dashboard(args, config)
-        elif args.train_only:
-            run_train_only(args, config, credentials)
+        elif args.scan_only:
+            run_scan_only(config, credentials)
         else:
             run_live(args, config, credentials)
 
