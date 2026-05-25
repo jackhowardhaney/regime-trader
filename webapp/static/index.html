@@ -396,6 +396,34 @@
     </div>
   </div>
 
+  <!-- Queued orders banner (hidden when empty) -->
+  <div id="plays-queued-section" class="hidden mb-5">
+    <div style="display:flex;align-items:center;gap:10px;background:#fffbeb;border:1.5px solid #f59e0b;border-radius:12px 12px 0 0;padding:12px 16px">
+      <svg style="width:18px;height:18px;color:#d97706;flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <div>
+        <span style="font-weight:700;color:#92400e;font-size:13px">Queued Orders — Not Yet in the Market</span>
+        <span style="color:#b45309;font-size:12px;margin-left:8px">These are pending limit orders waiting for market open. No position has been entered.</span>
+      </div>
+      <span id="queued-count-badge" style="margin-left:auto;background:#f59e0b;color:#fff;font-size:11px;font-weight:700;padding:2px 10px;border-radius:99px">0 pending</span>
+    </div>
+    <div style="border:1.5px solid #f59e0b;border-top:none;border-radius:0 0 12px 12px;overflow:hidden">
+      <table class="w-full">
+        <thead>
+          <tr style="background:#fef3c7">
+            <th class="brok-th-left" style="color:#92400e">Symbol / Signal</th>
+            <th class="brok-th" style="color:#92400e">Quantity</th>
+            <th class="brok-th" style="color:#92400e">Limit Price</th>
+            <th class="brok-th" style="color:#92400e">Order Value</th>
+            <th class="brok-th" style="color:#92400e">Stop / Target</th>
+            <th class="brok-th" style="color:#92400e">Status</th>
+            <th class="brok-th" style="color:#92400e">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="plays-queued-body"></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- Active plays brokerage table -->
   <div id="plays-active-list" class="card overflow-hidden">
     <table class="w-full">
@@ -1413,7 +1441,8 @@ function setPlaysTab(t) {
 async function loadPlays() {
   try {
     const [plays, port] = await Promise.all([api('/api/plays'), api('/api/portfolio')]);
-    renderActivePlays(plays.filter(p=>p.status==='ACTIVE'||p.status==='PENDING'));
+    renderQueuedPlays(plays.filter(p=>p.status==='PENDING'));
+    renderActivePlays(plays.filter(p=>p.status==='ACTIVE'));
     renderClosedPlays(plays.filter(p=>p.status==='CLOSED'));
     if(port && port.connected) {
       document.getElementById('ps-equity').textContent = fmt$(port.equity);
@@ -1429,6 +1458,43 @@ async function loadPlays() {
   } catch(e) {
     document.getElementById('plays-active-body').innerHTML = `<tr><td colspan="9" class="text-center py-6 text-red-400">${e.message}</td></tr>`;
   }
+}
+
+function renderQueuedPlays(plays) {
+  const sec = document.getElementById('plays-queued-section');
+  const tbody = document.getElementById('plays-queued-body');
+  const badge = document.getElementById('queued-count-badge');
+  if (!plays.length) { sec.classList.add('hidden'); return; }
+  sec.classList.remove('hidden');
+  if (badge) badge.textContent = plays.length + ' pending';
+  tbody.innerHTML = plays.map((p, i) => {
+    const entry  = p.entry_price || 0;
+    const shares = p.shares || 0;
+    const orderVal = entry * shares;
+    const bg = i % 2 === 1 ? 'background:#fffbeb' : 'background:#ffffff';
+    return `<tr style="${bg}">
+      <td class="brok-td-left">
+        <div class="brok-ticker" style="color:#92400e">${p.symbol}</div>
+        <div class="brok-name">${p.direction} · ${p.signal || 'swing'}</div>
+      </td>
+      <td class="brok-td">${shares}</td>
+      <td class="brok-td">${fmt$(entry)}</td>
+      <td class="brok-td">${fmt$(orderVal)}</td>
+      <td class="brok-td" style="font-size:11px">
+        <span style="color:#dc2626">▼ ${fmt$(p.stop_loss)}</span><br>
+        <span style="color:#16a34a">▲ ${fmt$(p.take_profit)}</span>
+      </td>
+      <td class="brok-td">
+        <span style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:99px;font-size:11px;font-weight:700;background:#fef3c7;color:#92400e;border:1px solid #f59e0b">
+          <svg style="width:10px;height:10px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          AWAITING FILL
+        </span>
+      </td>
+      <td class="brok-td">
+        <button onclick="deletePlay(${p.id})" class="btn btn-ghost text-xs py-1 px-2" style="color:#dc2626;border-color:#fca5a5">Cancel</button>
+      </td>
+    </tr>`;
+  }).join('');
 }
 
 function renderActivePlays(plays) {
