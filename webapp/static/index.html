@@ -58,6 +58,11 @@
   .signal-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-radius: 8px; margin-bottom: 4px; }
   .signal-bull { background: #f0fdf4; }
   .signal-bear { background: #fef2f2; }
+  input[type=range] { -webkit-appearance: none; appearance: none; background: transparent; }
+  input[type=range]::-webkit-slider-runnable-track { height: 6px; background: #e5e7eb; border-radius: 99px; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #4f46e5; margin-top: -6px; cursor: pointer; border: 2px solid #fff; box-shadow: 0 0 0 1px #4f46e5; }
+  input[type=range]::-moz-range-track { height: 6px; background: #e5e7eb; border-radius: 99px; }
+  input[type=range]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #4f46e5; border: 2px solid #fff; box-shadow: 0 0 0 1px #4f46e5; cursor: pointer; }
   .signal-neutral { background: #f8fafc; }
   tr.even { background: #f9fafb; }
   tr:hover td { background: #f3f4f6 !important; }
@@ -512,7 +517,7 @@
         <div>
           <label class="block text-xs text-gray-500 mb-2">Lookback Period</label>
           <input id="bt-period-slider" type="range" min="0" max="60" value="12"
-            class="w-full h-2 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+            class="w-full cursor-pointer" style="accent-color:#4f46e5;height:6px"
             oninput="onBtSliderChange(this.value)" />
           <div class="flex justify-between text-xs text-gray-500 mt-1">
             <span>10 days</span>
