@@ -601,6 +601,51 @@
     </table>
   </div>
 
+  <!-- ── 5-Year Strategy Analysis ── -->
+  <div class="card overflow-hidden mb-6">
+    <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+      <div>
+        <h3 class="font-medium text-gray-900">5-Year Strategy vs S&amp;P 500</h3>
+        <p class="text-xs text-gray-500 mt-0.5">Bot's exact signal logic (score ≥65, +5% target / -3% stop / 10-day hold) run across 38 symbols over 5 years · with OLS regression, linear trend &amp; Monte Carlo</p>
+      </div>
+      <button onclick="run5YBacktest()" id="s5y-btn" class="btn btn-primary text-xs">Run Analysis</button>
+    </div>
+    <div id="s5y-progress-section" class="hidden px-4 py-3 bg-indigo-50 border-b border-indigo-100">
+      <div class="flex items-center justify-between text-xs text-indigo-600 mb-2">
+        <span id="s5y-progress-label">Fetching 5 years of price data…</span>
+        <span id="s5y-pct">0%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="s5y-bar" style="width:0%;background:linear-gradient(90deg,#4f46e5,#7c3aed)"></div></div>
+      <p class="text-xs text-indigo-400 mt-1">Scoring every bar for 38 symbols — this takes 3–8 minutes. You can use other tabs while it runs.</p>
+    </div>
+    <div id="s5y-error" class="hidden px-4 py-3 text-red-500 text-xs bg-red-50 border-b border-red-100"></div>
+    <div id="s5y-result" class="hidden">
+      <!-- Summary metrics row -->
+      <div class="grid grid-cols-4 gap-0 border-b border-gray-200" id="s5y-metrics"></div>
+      <!-- OLS + Monte Carlo -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-0 border-b border-gray-200">
+        <div class="p-5 border-r border-gray-200">
+          <h4 class="text-sm font-semibold text-gray-900 mb-3">OLS Regression (Strategy vs SPY)</h4>
+          <div class="space-y-2" id="s5y-ols"></div>
+        </div>
+        <div class="p-5">
+          <h4 class="text-sm font-semibold text-gray-900 mb-3">Monte Carlo · 10,000 Simulations</h4>
+          <div id="s5y-mc"></div>
+        </div>
+      </div>
+      <!-- Equity curve chart -->
+      <div class="p-4 border-b border-gray-200">
+        <h4 class="text-sm font-semibold text-gray-900 mb-3">Equity Curve vs SPY Buy-and-Hold (starts $100k)</h4>
+        <canvas id="s5y-chart" height="140"></canvas>
+      </div>
+      <!-- Suggestions -->
+      <div class="p-4" id="s5y-suggestions"></div>
+    </div>
+    <div id="s5y-placeholder" class="px-4 py-10 text-center text-gray-400 text-sm">
+      Click "Run Analysis" to run the full 5-year strategy backtest. Takes 3–8 minutes.
+    </div>
+  </div>
+
   <!-- ── Plays Backtest ── -->
   <div class="card overflow-hidden">
     <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
@@ -2414,6 +2459,173 @@ function renderPlaysBacktest(rows) {
       <td class="px-4 py-3 text-right">${badge(vsPeerVal)}</td>
     </tr>`;
   }).join('');
+}
+
+// ── 5-Year Strategy Backtest ─────────────────────────────────────────
+let _s5yChart = null, _s5yPoller = null;
+
+async function run5YBacktest() {
+  document.getElementById('s5y-placeholder').classList.add('hidden');
+  document.getElementById('s5y-result').classList.add('hidden');
+  document.getElementById('s5y-error').classList.add('hidden');
+  document.getElementById('s5y-progress-section').classList.remove('hidden');
+  document.getElementById('s5y-btn').disabled = true;
+  document.getElementById('s5y-btn').textContent = 'Running…';
+  try {
+    await api('/api/strategy/backtest5y', {method:'POST'});
+  } catch(e) { /* already running is ok */ }
+  _poll5Y();
+}
+
+function _poll5Y() {
+  if (_s5yPoller) clearInterval(_s5yPoller);
+  _s5yPoller = setInterval(async () => {
+    try {
+      const st = await api('/api/strategy/backtest5y/status');
+      const bar = document.getElementById('s5y-bar');
+      const pct = document.getElementById('s5y-pct');
+      if (bar) bar.style.width = st.progress + '%';
+      if (pct) pct.textContent = st.progress + '%';
+      const lbl = document.getElementById('s5y-progress-label');
+      if (lbl) {
+        if (st.progress < 85) lbl.textContent = `Scoring signals across 38 symbols… (${st.progress}%)`;
+        else if (st.progress < 92) lbl.textContent = 'Running OLS regression & computing stats…';
+        else if (st.progress < 98) lbl.textContent = 'Running 10,000 Monte Carlo simulations…';
+        else lbl.textContent = 'Finalising results…';
+      }
+      if (st.error) {
+        clearInterval(_s5yPoller);
+        document.getElementById('s5y-progress-section').classList.add('hidden');
+        const err = document.getElementById('s5y-error');
+        err.textContent = 'Error: ' + st.error;
+        err.classList.remove('hidden');
+        resetS5yBtn();
+      } else if (!st.running && st.result) {
+        clearInterval(_s5yPoller);
+        document.getElementById('s5y-progress-section').classList.add('hidden');
+        render5YResult(st.result);
+        resetS5yBtn();
+      }
+    } catch(e) { clearInterval(_s5yPoller); resetS5yBtn(); }
+  }, 4000);
+}
+
+function resetS5yBtn() {
+  const btn = document.getElementById('s5y-btn');
+  if (btn) { btn.disabled = false; btn.textContent = 'Rerun'; }
+}
+
+function render5YResult(r) {
+  document.getElementById('s5y-result').classList.remove('hidden');
+  document.getElementById('s5y-placeholder').classList.add('hidden');
+
+  const beatSpy = r.final_equity > r.spy_final;
+  const stratColor = r.total_return_pct >= 0 ? '#16a34a' : '#dc2626';
+  const spyColor   = r.spy_ret_pct >= 0 ? '#16a34a' : '#dc2626';
+
+  // ── Metrics row ──
+  const metrics = [
+    {label:'Strategy Return', val:`${r.total_return_pct>=0?'+':''}${r.total_return_pct.toFixed(1)}%`, sub:`$${r.final_equity.toLocaleString('en-US',{maximumFractionDigits:0})}`, color:stratColor},
+    {label:'SPY Return (B&H)', val:`${r.spy_ret_pct>=0?'+':''}${r.spy_ret_pct.toFixed(1)}%`, sub:`$${r.spy_final.toLocaleString('en-US',{maximumFractionDigits:0})}`, color:spyColor},
+    {label:'Win Rate', val:`${r.win_rate.toFixed(1)}%`, sub:`${r.n_trades} trades · ${r.symbols_tested} symbols`},
+    {label:'Max Drawdown', val:`-${r.max_drawdown_pct.toFixed(1)}%`, sub:`Sharpe ${r.sharpe.toFixed(2)}`, color:'#dc2626'},
+    {label:'Avg Win', val:`+${r.avg_win_pct.toFixed(2)}%`, sub:'per trade', color:'#16a34a'},
+    {label:'Avg Loss', val:`${r.avg_loss_pct.toFixed(2)}%`, sub:'per trade', color:'#dc2626'},
+    {label:'Profit Factor', val:r.profit_factor.toFixed(2), sub:'wins/losses ratio', color: r.profit_factor>=1.5?'#16a34a':r.profit_factor>=1.0?'#d97706':'#dc2626'},
+    {label:'vs SPY', val:beatSpy?'Outperforms':'Underperforms', sub:`by ${Math.abs(r.total_return_pct-r.spy_ret_pct).toFixed(1)}%`, color:beatSpy?'#16a34a':'#dc2626'},
+  ];
+  document.getElementById('s5y-metrics').innerHTML = metrics.map(m =>
+    `<div style="padding:16px;border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb">
+      <p style="font-size:11px;color:#6b7280;margin-bottom:4px">${m.label}</p>
+      <p style="font-size:20px;font-weight:700;color:${m.color||'#111827'}">${m.val}</p>
+      <p style="font-size:11px;color:#9ca3af">${m.sub||''}</p>
+    </div>`
+  ).join('');
+
+  // ── OLS ──
+  const sig = r.p_value < 0.05;
+  document.getElementById('s5y-ols').innerHTML = `
+    <div class="grid grid-cols-2 gap-3">
+      ${[
+        {k:'Alpha (annualized)', v:`${r.alpha_annualized>=0?'+':''}${r.alpha_annualized.toFixed(2)}%`, note:'Excess return vs market per year', color: r.alpha_annualized>0?'#16a34a':'#dc2626'},
+        {k:'Beta', v:r.beta.toFixed(3), note:r.beta>1?'Amplifies market moves':'Less volatile than market'},
+        {k:'R²', v:r.r_squared.toFixed(3), note:'How much returns explained by SPY'},
+        {k:'p-value', v:r.p_value.toFixed(4), note:sig?'✓ Statistically significant (p<0.05)':'✗ Not yet significant — need more trades'},
+      ].map(o=>`<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px">
+        <p style="font-size:11px;color:#6b7280">${o.k}</p>
+        <p style="font-size:18px;font-weight:700;color:${o.color||'#111827'}">${o.v}</p>
+        <p style="font-size:10px;color:#9ca3af;margin-top:2px">${o.note}</p>
+      </div>`).join('')}
+    </div>
+    <p style="font-size:11px;color:#6b7280;margin-top:10px;line-height:1.6">
+      <b>Equity trend:</b> $${r.trend_slope >= 0 ? '+' : ''}${r.trend_slope.toFixed(0)} per trade (linear regression slope on equity curve).
+      ${r.trend_slope > 0 ? '↑ Positive trajectory — strategy is growing equity over time.' : '↓ Negative slope — strategy is losing equity on average per trade.'}
+    </p>`;
+
+  // ── Monte Carlo ──
+  const fmt$ = (n) => '$'+Math.round(n).toLocaleString('en-US');
+  document.getElementById('s5y-mc').innerHTML = `
+    <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:10px">
+      <p style="font-size:11px;font-weight:600;color:#374151;margin-bottom:8px">Final equity distribution (10,000 simulations, starting $100k)</p>
+      ${[
+        {pct:'5th percentile (bad luck)', val:r.mc_p5, color:'#dc2626'},
+        {pct:'25th percentile', val:r.mc_p25, color:'#f59e0b'},
+        {pct:'50th percentile (median)', val:r.mc_p50, color:'#6366f1'},
+        {pct:'75th percentile', val:r.mc_p75, color:'#16a34a'},
+        {pct:'95th percentile (good luck)', val:r.mc_p95, color:'#15803d'},
+      ].map(row=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid #f3f4f6">
+        <span style="font-size:11px;color:#6b7280">${row.pct}</span>
+        <span style="font-size:13px;font-weight:700;color:${row.color}">${fmt$(row.val)}</span>
+      </div>`).join('')}
+    </div>
+    <div style="display:flex;gap:12px">
+      <div style="flex:1;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px;text-align:center">
+        <p style="font-size:11px;color:#16a34a">Probability of profit</p>
+        <p style="font-size:22px;font-weight:800;color:#16a34a">${r.mc_prob_profit}%</p>
+      </div>
+      <div style="flex:1;background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:10px;text-align:center">
+        <p style="font-size:11px;color:#2563eb">Probability of 2× ($200k)</p>
+        <p style="font-size:22px;font-weight:800;color:#2563eb">${r.mc_prob_2x}%</p>
+      </div>
+    </div>`;
+
+  // ── Equity chart ──
+  const ctx = document.getElementById('s5y-chart').getContext('2d');
+  if (_s5yChart) _s5yChart.destroy();
+  const labels = r.trade_dates.length ? r.trade_dates : r.equity_curve.map((_,i)=>i);
+  const spyPoints = r.equity_curve.map((_,i) => {
+    const progress = i / Math.max(r.equity_curve.length - 1, 1);
+    return Math.round(100_000 * (1 + progress * r.spy_ret_pct / 100));
+  });
+  _s5yChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {label:'Strategy', data:r.equity_curve, borderColor:'#4f46e5', borderWidth:2, pointRadius:0, tension:0.3, fill:false},
+        {label:'SPY B&H',  data:spyPoints,      borderColor:'#d97706', borderWidth:1.5, pointRadius:0, borderDash:[4,4], tension:0.3, fill:false},
+      ]
+    },
+    options: {
+      responsive:true, animation:false,
+      plugins:{legend:{labels:{color:'#374151',font:{size:11}}}, tooltip:{mode:'index'}},
+      scales:{
+        x:{ticks:{color:'#9ca3af',font:{size:9},maxTicksLimit:10}, grid:{color:'#f3f4f6'}},
+        y:{ticks:{color:'#9ca3af',font:{size:10},callback:v=>'$'+Math.round(v/1000)+'k'}, grid:{color:'#f3f4f6'}},
+      }
+    }
+  });
+
+  // ── Suggestions ──
+  document.getElementById('s5y-suggestions').innerHTML = `
+    <h4 class="text-sm font-semibold text-gray-900 mb-3">Optimisation Suggestions</h4>
+    <div class="space-y-2">
+      ${r.suggestions.map(s=>`
+        <div style="display:flex;gap:10px;align-items:flex-start;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px">
+          <svg style="width:16px;height:16px;color:#6366f1;flex-shrink:0;margin-top:1px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+          <p style="font-size:12px;color:#374151;line-height:1.5">${s}</p>
+        </div>`).join('')}
+    </div>`;
 }
 
 // Boot

@@ -1431,6 +1431,256 @@ def refresh_play_backtests():
     return {"status": "computing"}
 
 
+# ── 5-Year Strategy Backtest ───────────────────────────────────────
+_S5Y_STATE: Dict = {"running": False, "progress": 0, "result": None, "error": None}
+
+# Representative liquid symbols across sectors — broad enough to be statistically valid
+_S5Y_SYMBOLS = [
+    "AAPL","MSFT","NVDA","GOOGL","AMZN","META","TSLA",
+    "JPM","GS","BAC","V","MA",
+    "LLY","JNJ","ABBV","UNH",
+    "XOM","CVX","COP",
+    "NEE","FSLR",
+    "LMT","RTX",
+    "CAT","HON","DE","GE",
+    "EQIX","DLR",
+    "CRM","NOW","CRWD",
+    "COIN","MSTR",
+    "NUE","URI","SLB","TXN",
+]
+
+def _run_5y_backtest():
+    import numpy as np
+    try:
+        from core.opportunity_scanner import score_symbol as _score_sym
+    except Exception as e:
+        _S5Y_STATE["error"] = f"Import failed: {e}"
+        _S5Y_STATE["running"] = False
+        return
+
+    _S5Y_STATE.update({"running": True, "progress": 0, "result": None, "error": None})
+    DAYS = 1825          # ~5 years
+    SCORE_THRESHOLD = 65
+    TARGET_PCT = 0.05
+    STOP_PCT   = 0.03
+    HOLD_DAYS  = 10
+    POSITION_PCT = 0.10  # 10% of equity per trade
+
+    all_trades: list = []  # list of (date_idx, ret_pct)
+    date_index = None      # will use SPY dates as the master calendar
+
+    # Load SPY first for benchmark
+    spy_df = _load_bars("SPY", days=DAYS + 60)
+    if spy_df is None or spy_df.empty:
+        _S5Y_STATE.update({"error": "SPY data unavailable", "running": False})
+        return
+
+    total_syms = len(_S5Y_SYMBOLS)
+    for si, sym in enumerate(_S5Y_SYMBOLS):
+        _S5Y_STATE["progress"] = int(si / total_syms * 80)
+        try:
+            df = _load_bars(sym, days=DAYS + 60)
+            if df is None or len(df) < 110:
+                continue
+            open_ = df["open"].astype(float)
+            high_ = df["high"].astype(float)
+            low_  = df["low"].astype(float)
+            close_ = df["close"].astype(float)
+            n = len(df)
+            window_start = max(55, n - DAYS)
+            for i in range(window_start, n - HOLD_DAYS - 1):
+                scored = _score_sym(df.iloc[:i + 1], sym)
+                if not scored or scored["score"] < SCORE_THRESHOLD or not scored["firing_signals"]:
+                    continue
+                entry = float(open_.iloc[i + 1])
+                if entry <= 0:
+                    continue
+                target = entry * (1 + TARGET_PCT)
+                stop   = entry * (1 - STOP_PCT)
+                exit_px = float(close_.iloc[min(i + HOLD_DAYS, n - 1)])
+                for j in range(i + 1, min(i + HOLD_DAYS + 1, n)):
+                    if float(high_.iloc[j]) >= target:
+                        exit_px = target; break
+                    if float(low_.iloc[j]) <= stop:
+                        exit_px = stop; break
+                ret = (exit_px / entry - 1) * 100
+                # Map bar index to calendar date
+                try:
+                    bar_date = df.index[i + 1]
+                except Exception:
+                    bar_date = None
+                all_trades.append({"sym": sym, "ret": ret, "date": str(bar_date)[:10] if bar_date else ""})
+        except Exception:
+            continue
+
+    if not all_trades:
+        _S5Y_STATE.update({"error": "No trades fired in 5-year window", "running": False})
+        return
+
+    _S5Y_STATE["progress"] = 85
+
+    # ── Equity curve ──────────────────────────────────────────────────
+    # Sort trades by date, simulate equity with 10% position sizing
+    sorted_trades = sorted(all_trades, key=lambda x: x["date"])
+    equity = 100_000.0
+    equity_curve = [equity]
+    daily_rets: list = []
+    for t in sorted_trades:
+        pos_size = equity * POSITION_PCT
+        pnl = pos_size * t["ret"] / 100
+        equity += pnl
+        equity_curve.append(round(equity, 2))
+        daily_rets.append(t["ret"] / 100)
+
+    # ── SPY buy-and-hold curve ────────────────────────────────────────
+    spy_close = spy_df["close"].astype(float)
+    spy_ret_total = float((spy_close.iloc[-1] - spy_close.iloc[0]) / spy_close.iloc[0] * 100)
+    spy_final = round(100_000 * (1 + spy_ret_total / 100), 2)
+    spy_daily = spy_close.pct_change().dropna().values.tolist()
+
+    # ── Key stats ─────────────────────────────────────────────────────
+    rets_arr = np.array(daily_rets)
+    total_return = (equity_curve[-1] - 100_000) / 100_000 * 100
+    n_trades = len(sorted_trades)
+    wins = [r for r in daily_rets if r > 0]
+    losses = [r for r in daily_rets if r <= 0]
+    win_rate = len(wins) / n_trades * 100 if n_trades else 0
+    avg_win  = float(np.mean(wins)) * 100 if wins else 0
+    avg_loss = float(np.mean(losses)) * 100 if losses else 0
+    profit_factor = (sum(wins) / abs(sum(losses))) if losses else 99.0
+    # Max drawdown
+    peak, max_dd = 100_000.0, 0.0
+    for eq in equity_curve:
+        peak = max(peak, eq)
+        dd = (peak - eq) / peak * 100
+        max_dd = max(max_dd, dd)
+    # Sharpe (annualized, rf=0)
+    if len(rets_arr) > 1 and np.std(rets_arr) > 0:
+        sharpe = float(np.mean(rets_arr) / np.std(rets_arr) * np.sqrt(252))
+    else:
+        sharpe = 0.0
+
+    _S5Y_STATE["progress"] = 90
+
+    # ── OLS regression (strategy vs SPY) ─────────────────────────────
+    try:
+        from scipy import stats as _stats
+        spy_rets_arr = np.array(spy_daily)
+        # Align lengths by taking the shorter
+        min_len = min(len(rets_arr), len(spy_rets_arr))
+        s_rets = rets_arr[-min_len:]
+        m_rets = spy_rets_arr[-min_len:]
+        slope, intercept, r_value, p_value, std_err = _stats.linregress(m_rets, s_rets)
+        alpha_annualized = float(intercept * 252 * 100)
+        beta = float(slope)
+        r_squared = float(r_value ** 2)
+        p_val = float(p_value)
+    except Exception:
+        alpha_annualized, beta, r_squared, p_val = 0.0, 1.0, 0.0, 1.0
+
+    # ── Linear regression on equity curve (trend line) ────────────────
+    try:
+        x = np.arange(len(equity_curve), dtype=float)
+        trend_slope, trend_intercept = np.polyfit(x, equity_curve, 1)
+        trend_slope_per_trade = float(trend_slope)
+    except Exception:
+        trend_slope_per_trade = 0.0
+
+    _S5Y_STATE["progress"] = 95
+
+    # ── Monte Carlo (10,000 simulations) ─────────────────────────────
+    try:
+        np.random.seed(42)
+        N_SIM = 10_000
+        sim_finals = []
+        for _ in range(N_SIM):
+            sampled = np.random.choice(rets_arr, size=n_trades, replace=True)
+            eq = 100_000.0
+            for r in sampled:
+                eq += eq * POSITION_PCT * r
+            sim_finals.append(eq)
+        sim_arr = np.array(sim_finals)
+        mc_p5  = round(float(np.percentile(sim_arr, 5)),  2)
+        mc_p25 = round(float(np.percentile(sim_arr, 25)), 2)
+        mc_p50 = round(float(np.percentile(sim_arr, 50)), 2)
+        mc_p75 = round(float(np.percentile(sim_arr, 75)), 2)
+        mc_p95 = round(float(np.percentile(sim_arr, 95)), 2)
+        mc_prob_profit = round(float(np.mean(sim_arr > 100_000) * 100), 1)
+        mc_prob_2x     = round(float(np.mean(sim_arr > 200_000) * 100), 1)
+    except Exception:
+        mc_p5 = mc_p25 = mc_p50 = mc_p75 = mc_p95 = 100_000.0
+        mc_prob_profit = mc_prob_2x = 0.0
+
+    # ── Optimisation suggestions ───────────────────────────────────────
+    suggestions = []
+    if win_rate < 52:
+        suggestions.append("Win rate below 52% — tighten score threshold to ≥70 to filter marginal setups")
+    if avg_loss < -4.5:
+        suggestions.append("Average loss approaching stop (-3%) — consider tightening stop to -2.5% to reduce drawdown")
+    if avg_win < 3:
+        suggestions.append("Average win (+%.1f%%) smaller than expected — consider raising target to +6%% for better reward:risk" % avg_win)
+    if beta > 1.2:
+        suggestions.append(f"Beta {beta:.2f} > 1.2 — strategy is amplifying market moves; add volatility filter (avoid entries when VIX >25)")
+    if alpha_annualized < 2:
+        suggestions.append(f"Alpha {alpha_annualized:.1f}% is low — strategy is not consistently beating the market; review signal weights")
+    if max_dd > 25:
+        suggestions.append(f"Max drawdown {max_dd:.1f}% is high — reduce position size to 7% or add portfolio-level stop (close all if equity drops 15%)")
+    if profit_factor < 1.5:
+        suggestions.append(f"Profit factor {profit_factor:.2f} — targeting ≥1.8 for robust edge; eliminate weakest-performing signal type")
+    if not suggestions:
+        suggestions.append("Strategy metrics look solid. Continue running until 100+ closed trades for statistical significance.")
+
+    _S5Y_STATE["progress"] = 100
+    _S5Y_STATE["result"] = {
+        "computed_at": datetime.utcnow().isoformat(),
+        "symbols_tested": len(_S5Y_SYMBOLS),
+        "n_trades": n_trades,
+        "total_return_pct": round(total_return, 2),
+        "final_equity": round(equity_curve[-1], 2),
+        "spy_final": spy_final,
+        "spy_ret_pct": round(spy_ret_total, 2),
+        "win_rate": round(win_rate, 1),
+        "avg_win_pct": round(avg_win, 2),
+        "avg_loss_pct": round(avg_loss, 2),
+        "profit_factor": round(min(profit_factor, 99.0), 2),
+        "max_drawdown_pct": round(max_dd, 2),
+        "sharpe": round(sharpe, 2),
+        "alpha_annualized": round(alpha_annualized, 2),
+        "beta": round(beta, 3),
+        "r_squared": round(r_squared, 3),
+        "p_value": round(p_val, 4),
+        "trend_slope": round(trend_slope_per_trade, 2),
+        "mc_p5":  mc_p5,  "mc_p25": mc_p25, "mc_p50": mc_p50,
+        "mc_p75": mc_p75, "mc_p95": mc_p95,
+        "mc_prob_profit": mc_prob_profit,
+        "mc_prob_2x": mc_prob_2x,
+        "suggestions": suggestions,
+        # Sampled equity curve (every Nth point to keep payload small)
+        "equity_curve": equity_curve[::max(1, len(equity_curve)//200)],
+        "trade_dates": [t["date"] for t in sorted_trades][::max(1, n_trades//200)],
+    }
+    _S5Y_STATE["running"] = False
+
+
+@app.post("/api/strategy/backtest5y")
+def start_5y_backtest():
+    if _S5Y_STATE["running"]:
+        return {"status": "already_running", "progress": _S5Y_STATE["progress"]}
+    _S5Y_STATE.update({"running": True, "progress": 0, "result": None, "error": None})
+    threading.Thread(target=_run_5y_backtest, daemon=True).start()
+    return {"status": "started"}
+
+
+@app.get("/api/strategy/backtest5y/status")
+def get_5y_status():
+    return {
+        "running":  _S5Y_STATE["running"],
+        "progress": _S5Y_STATE["progress"],
+        "result":   _S5Y_STATE["result"],
+        "error":    _S5Y_STATE["error"],
+    }
+
+
 @app.get("/api/health")
 def health():
     return {"status": "ok", "time": datetime.utcnow().isoformat()}
