@@ -111,7 +111,7 @@
       <svg class="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
       </svg>
-      <span class="font-semibold text-white text-lg tracking-tight">Regime Trader</span>
+      <span class="font-semibold text-gray-900 text-lg tracking-tight">Regime Trader</span>
       <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full ml-1">PAPER</span>
     </div>
     <!-- Tabs -->
@@ -299,25 +299,25 @@
   <div class="card p-5 mb-6">
     <h3 class="text-sm font-semibold text-gray-900 mb-3">Score Methodology (0–100)</h3>
     <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-      <div class="bg-gray-900 rounded-lg p-3 border border-indigo-900">
-        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-indigo-400"></div><span class="text-sm font-semibold text-indigo-300">Trend</span><span class="text-xs text-gray-500 ml-auto">25 pts</span></div>
-        <p class="text-xs text-gray-400">Price vs EMA21 (+8), EMA50 (+9), SMA200 (+8)</p>
+      <div class="bg-indigo-50 rounded-lg p-3 border border-indigo-200">
+        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-indigo-500"></div><span class="text-sm font-semibold text-indigo-700">Trend</span><span class="text-xs text-gray-500 ml-auto">25 pts</span></div>
+        <p class="text-xs text-gray-600">Price vs EMA21 (+8), EMA50 (+9), SMA200 (+8)</p>
       </div>
-      <div class="bg-gray-900 rounded-lg p-3 border border-blue-900">
-        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-blue-400"></div><span class="text-sm font-semibold text-blue-300">Momentum</span><span class="text-xs text-gray-500 ml-auto">25 pts</span></div>
-        <p class="text-xs text-gray-400">MACD positive (+10), ROC10 &gt;3% (+8), breakout bonus (+7)</p>
+      <div class="bg-blue-50 rounded-lg p-3 border border-blue-200">
+        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-blue-500"></div><span class="text-sm font-semibold text-blue-700">Momentum</span><span class="text-xs text-gray-500 ml-auto">25 pts</span></div>
+        <p class="text-xs text-gray-600">MACD positive (+10), ROC10 &gt;3% (+8), breakout bonus (+7)</p>
       </div>
-      <div class="bg-gray-900 rounded-lg p-3 border border-green-900">
-        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-green-400"></div><span class="text-sm font-semibold text-green-300">RSI</span><span class="text-xs text-gray-500 ml-auto">20 pts</span></div>
-        <p class="text-xs text-gray-400">Optimal 40–65 zone (+20). Partial 35–70. Penalty at extremes.</p>
+      <div class="bg-green-50 rounded-lg p-3 border border-green-200">
+        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-green-500"></div><span class="text-sm font-semibold text-green-700">RSI</span><span class="text-xs text-gray-500 ml-auto">20 pts</span></div>
+        <p class="text-xs text-gray-600">Optimal 40–65 zone (+20). Partial 35–70. Penalty at extremes.</p>
       </div>
-      <div class="bg-gray-900 rounded-lg p-3 border border-orange-900">
-        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-orange-400"></div><span class="text-sm font-semibold text-orange-300">Volume</span><span class="text-xs text-gray-500 ml-auto">15 pts</span></div>
-        <p class="text-xs text-gray-400">2× avg (+15), 1.5× avg (+10), above avg (+5)</p>
+      <div class="bg-orange-50 rounded-lg p-3 border border-orange-200">
+        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-orange-500"></div><span class="text-sm font-semibold text-orange-700">Volume</span><span class="text-xs text-gray-500 ml-auto">15 pts</span></div>
+        <p class="text-xs text-gray-600">2× avg (+15), 1.5× avg (+10), above avg (+5)</p>
       </div>
-      <div class="bg-gray-900 rounded-lg p-3 border border-amber-900">
-        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-amber-400"></div><span class="text-sm font-semibold text-amber-300">Pattern</span><span class="text-xs text-gray-500 ml-auto">15 pts</span></div>
-        <p class="text-xs text-gray-400">Golden Cross (+15), EMA Bounce (+10), BB Breakout (+8)</p>
+      <div class="bg-amber-50 rounded-lg p-3 border border-amber-200">
+        <div class="flex items-center gap-2 mb-1"><div class="w-3 h-3 rounded-full bg-amber-500"></div><span class="text-sm font-semibold text-amber-700">Pattern</span><span class="text-xs text-gray-500 ml-auto">15 pts</span></div>
+        <p class="text-xs text-gray-600">Golden Cross (+15), EMA Bounce (+10), BB Breakout (+8)</p>
       </div>
     </div>
   </div>
@@ -353,8 +353,8 @@
   <!-- Initial empty state -->
   <div id="scanner-empty" class="text-center py-12">
     <div class="text-5xl mb-4">&#x1F4E1;</div>
-    <h3 class="text-xl font-semibold text-white mb-2">Ready to scan</h3>
-    <p class="text-gray-400 mb-6 max-w-md mx-auto">Click "Run Scan" to score 100+ symbols across quantum computing, AI, semiconductors, energy, data centers, and more.</p>
+    <h3 class="text-xl font-semibold text-gray-900 mb-2">Ready to scan</h3>
+    <p class="text-gray-500 mb-6 max-w-md mx-auto">Click "Run Scan" to score 100+ symbols across quantum computing, AI, semiconductors, energy, data centers, and more.</p>
     <button onclick="startScan()" class="btn btn-primary text-base px-6 py-2.5">Run First Scan</button>
   </div>
 </div>
@@ -468,7 +468,7 @@
             oninput="onBtSliderChange(this.value)" />
           <div class="flex justify-between text-xs text-gray-500 mt-1">
             <span>10 days</span>
-            <span id="bt-period-label" class="text-white font-semibold">1 year</span>
+            <span id="bt-period-label" class="text-gray-900 font-semibold">1 year</span>
             <span>5 years</span>
           </div>
           <div class="mt-2 text-xs text-gray-500 text-center" id="bt-period-dates"></div>
@@ -496,21 +496,21 @@
     <div class="card p-5 col-span-2">
       <h3 class="font-medium text-gray-900 mb-4">Latest Results</h3>
       <div id="bt-metrics" class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
-        <div class="bg-gray-900 rounded-lg p-3">
+        <div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
           <p class="text-xs text-gray-500">Total Return</p>
-          <p class="text-xl font-bold mt-1" id="bt-m-ret">—</p>
+          <p class="text-xl font-bold mt-1 text-gray-900" id="bt-m-ret">—</p>
         </div>
-        <div class="bg-gray-900 rounded-lg p-3">
+        <div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
           <p class="text-xs text-gray-500">CAGR</p>
-          <p class="text-xl font-bold mt-1" id="bt-m-cagr">—</p>
+          <p class="text-xl font-bold mt-1 text-gray-900" id="bt-m-cagr">—</p>
         </div>
-        <div class="bg-gray-900 rounded-lg p-3">
+        <div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
           <p class="text-xs text-gray-500">Sharpe</p>
-          <p class="text-xl font-bold mt-1" id="bt-m-sharpe">—</p>
+          <p class="text-xl font-bold mt-1 text-gray-900" id="bt-m-sharpe">—</p>
         </div>
-        <div class="bg-gray-900 rounded-lg p-3">
+        <div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
           <p class="text-xs text-gray-500">Max Drawdown</p>
-          <p class="text-xl font-bold mt-1 text-red-400" id="bt-m-dd">—</p>
+          <p class="text-xl font-bold mt-1 text-red-600" id="bt-m-dd">—</p>
         </div>
       </div>
       <!-- Regime breakdown -->
@@ -533,7 +533,7 @@
   <!-- Run history -->
   <div class="card overflow-hidden">
     <div class="px-4 py-3 border-b border-gray-200">
-      <h3 class="font-medium text-white">Past Runs</h3>
+      <h3 class="font-medium text-gray-900">Past Runs</h3>
     </div>
     <table class="w-full text-sm">
       <thead>
@@ -606,20 +606,20 @@
   <!-- Trade log -->
   <div class="card overflow-hidden">
     <div class="px-4 py-3 border-b border-gray-200 flex items-center gap-3">
-      <h3 class="font-medium text-white flex-1">Trade Log</h3>
+      <h3 class="font-medium text-gray-900 flex-1">Trade Log</h3>
       <input type="text" placeholder="Filter by symbol…" id="h-filter" oninput="filterHistory()" class="input text-xs py-1.5 w-36" />
     </div>
     <table class="w-full text-sm">
       <thead>
         <tr class="border-b border-gray-200 text-gray-500 text-xs uppercase tracking-wider bg-gray-50">
-          <th class="text-left px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('symbol')">Symbol</th>
+          <th class="text-left px-4 py-3 cursor-pointer hover:text-gray-600" onclick="sortHistory('symbol')">Symbol</th>
           <th class="text-left px-4 py-3">Dir</th>
-          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('entry_price')">Entry</th>
-          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('exit_price')">Exit</th>
-          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('shares')">Shares</th>
-          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('pnl')">P&L</th>
-          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('pnl_pct')">P&L %</th>
-          <th class="text-left px-4 py-3 cursor-pointer hover:text-gray-300" onclick="sortHistory('exit_date')">Closed</th>
+          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-600" onclick="sortHistory('entry_price')">Entry</th>
+          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-600" onclick="sortHistory('exit_price')">Exit</th>
+          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-600" onclick="sortHistory('shares')">Shares</th>
+          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-600" onclick="sortHistory('pnl')">P&L</th>
+          <th class="text-right px-4 py-3 cursor-pointer hover:text-gray-600" onclick="sortHistory('pnl_pct')">P&L %</th>
+          <th class="text-left px-4 py-3 cursor-pointer hover:text-gray-600" onclick="sortHistory('exit_date')">Closed</th>
         </tr>
       </thead>
       <tbody id="history-body">
@@ -640,7 +640,7 @@
      ══════════════════════════════════════════════════ -->
 <div id="modal-add-symbol" class="modal-overlay hidden">
   <div class="modal-box">
-    <h2 class="text-lg font-semibold text-white mb-4">Add to Watchlist</h2>
+    <h2 class="text-lg font-semibold text-gray-900 mb-4">Add to Watchlist</h2>
     <div class="space-y-3">
       <div>
         <label class="block text-xs text-gray-500 mb-1">Ticker Symbol</label>
@@ -664,8 +664,8 @@
 <div id="modal-signals" class="modal-overlay hidden">
   <div class="modal-box">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold text-white" id="sig-modal-title">Analyzing…</h2>
-      <button onclick="closeModal('modal-signals')" class="text-gray-500 hover:text-white">✕</button>
+      <h2 class="text-lg font-semibold text-gray-900" id="sig-modal-title">Analyzing…</h2>
+      <button onclick="closeModal('modal-signals')" class="text-gray-500 hover:text-gray-900">✕</button>
     </div>
     <div id="sig-modal-body">
       <div class="text-center py-8 text-gray-500">Loading signals…</div>
@@ -679,8 +679,8 @@
 <div id="modal-new-play" class="modal-overlay hidden">
   <div class="modal-box">
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-lg font-semibold text-white">New Play</h2>
-      <button onclick="closeModal('modal-new-play')" class="text-gray-500 hover:text-white">✕</button>
+      <h2 class="text-lg font-semibold text-gray-900">New Play</h2>
+      <button onclick="closeModal('modal-new-play')" class="text-gray-500 hover:text-gray-900">✕</button>
     </div>
     <div class="space-y-3">
       <div class="grid grid-cols-2 gap-3">
@@ -701,10 +701,10 @@
         </div>
       </div>
       <!-- Live data bar — hidden until a symbol is fetched -->
-      <div id="np-live-bar" class="hidden bg-gray-900 rounded-lg px-3 py-2 text-xs" style="display:none">
+      <div id="np-live-bar" class="hidden bg-gray-50 border border-gray-200 rounded-lg px-3 py-2 text-xs" style="display:none">
         <div class="flex items-center gap-4 flex-wrap">
           <span class="text-gray-500">Price</span>
-          <span class="text-white font-mono font-semibold" id="np-live-price">—</span>
+          <span class="text-gray-900 font-mono font-semibold" id="np-live-price">—</span>
           <span class="text-gray-500">RSI</span>
           <span class="font-semibold" id="np-live-rsi">—</span>
           <span class="text-gray-500">BSH</span>
@@ -738,9 +738,9 @@
           <input id="np-shares" type="number" step="0.01" class="input" placeholder="0" />
         </div>
         <div class="flex flex-col justify-end">
-          <div class="bg-gray-900 rounded-lg p-2 text-center">
+          <div class="bg-gray-50 border border-gray-200 rounded-lg p-2 text-center">
             <p class="text-xs text-gray-500">R:R Ratio</p>
-            <p class="text-lg font-bold text-indigo-400" id="np-rr">—</p>
+            <p class="text-lg font-bold text-indigo-600" id="np-rr">—</p>
           </div>
         </div>
       </div>
@@ -751,7 +751,7 @@
       <div class="flex items-center gap-3 bg-gray-50 rounded-lg p-3">
         <input id="np-submit-order" type="checkbox" class="w-4 h-4 accent-indigo-500" />
         <div>
-          <p class="text-sm text-white">Submit to Alpaca</p>
+          <p class="text-sm text-gray-900">Submit to Alpaca</p>
           <p class="text-xs text-gray-500">Places a paper limit order at entry price</p>
         </div>
       </div>
@@ -768,7 +768,7 @@
      ══════════════════════════════════════════════════ -->
 <div id="modal-close-play" class="modal-overlay hidden">
   <div class="modal-box" style="width:360px">
-    <h2 class="text-lg font-semibold text-white mb-4">Close Play</h2>
+    <h2 class="text-lg font-semibold text-gray-900 mb-4">Close Play</h2>
     <input type="hidden" id="cp-id" />
     <div>
       <label class="block text-xs text-gray-500 mb-1">Exit Price (leave blank for market)</label>
@@ -976,7 +976,7 @@ function _renderSectorChips() {
   for (const s of _sectorData) {
     const active = _selectedSectors.has(s.key);
     const cnt = all.filter(r => r.sectors && r.sectors.includes(s.key)).length;
-    html += `<button onclick="toggleSector('${s.key}')" style="border-radius:99px;padding:4px 12px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid;${active?`background:${s.color}20;color:${s.color};border-color:${s.color}60`:'background:#1a1a24;color:#9ca3af;border-color:#252535'}">${s.name}${cnt?' ('+cnt+')':''}</button>`;
+    html += `<button onclick="toggleSector('${s.key}')" style="border-radius:99px;padding:4px 12px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid;${active?`background:${s.color}20;color:${s.color};border-color:${s.color}60`:'background:#f3f4f6;color:#6b7280;border-color:#d1d5db'}">${s.name}${cnt?' ('+cnt+')':''}</button>`;
   }
   el.innerHTML = html;
 }
@@ -1008,7 +1008,7 @@ function _renderFiringNow(rows) {
     const more = syms.length>6 ? `<span style="font-size:11px;color:#6b7280">+${syms.length-6}</span>` : '';
     return `<div class="card p-3" style="border-left:3px solid ${m.hex}">
       <div style="font-size:13px;font-weight:600;color:${m.hex};margin-bottom:2px">${m.label}</div>
-      <div style="font-size:11px;color:#6b7280;margin-bottom:8px;line-height:1.4">${m.desc}</div>
+      <div style="font-size:11px;color:#374151;margin-bottom:8px;line-height:1.4">${m.desc}</div>
       <div style="display:flex;flex-wrap:wrap;gap:2px">${pills}${more}</div>
     </div>`;
   }).join('');
@@ -1041,12 +1041,12 @@ function _renderOpportunities(rows) {
       const pct = compMax[k]>0?(v/compMax[k]*100):0;
       return `<div title="${k}: ${v}/${compMax[k]}" style="height:5px;width:${Math.max(3,pct*0.44)}px;background:${compColors[k]||'#6366f1'};border-radius:2px;display:inline-block;margin-right:1px"></div>`;
     }).join('');
-    const rsiCol = r.rsi>70?'#f87171':r.rsi<30?'#4ade80':'#d1d5db';
-    const volCol = r.vol_ratio>=1.5?'#fbbf24':'#d1d5db';
-    const bgRow = i%2===0?'':'background:#111118';
+    const rsiCol = r.rsi>70?'#dc2626':r.rsi<30?'#16a34a':'#374151';
+    const volCol = r.vol_ratio>=1.5?'#d97706':'#374151';
+    const bgRow = i%2===0?'':'background:#f9fafb';
     return `<tr class="border-b border-gray-200" style="${bgRow}">
-      <td class="px-4 py-2.5 font-bold text-white">${r.symbol}</td>
-      <td class="px-4 py-2.5 text-right text-gray-200">$${r.price}</td>
+      <td class="px-4 py-2.5 font-bold text-gray-900">${r.symbol}</td>
+      <td class="px-4 py-2.5 text-right text-gray-700">$${r.price}</td>
       <td class="px-4 py-2.5">
         <div style="display:flex;align-items:center;gap:6px">
           <span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700;background:${bshBg};color:${bshColor};border:1px solid ${bshBdr}">${bsh}</span>
@@ -1056,9 +1056,9 @@ function _renderOpportunities(rows) {
         </div>
       </td>
       <td class="px-4 py-2.5 text-center">${_btBadge(r.symbol)}</td>
-      <td class="px-4 py-2.5">${sigBadges||'<span style="font-size:11px;color:#4b5563">—</span>'}</td>
-      <td class="px-4 py-2.5 text-right" style="color:${rsiCol};font-weight:500">${r.rsi}</td>
-      <td class="px-4 py-2.5 text-right" style="color:${volCol};font-weight:500">${r.vol_ratio}×</td>
+      <td class="px-4 py-2.5">${sigBadges||'<span style="font-size:11px;color:#6b7280">—</span>'}</td>
+      <td class="px-4 py-2.5 text-right font-medium" style="color:${rsiCol}">${r.rsi}</td>
+      <td class="px-4 py-2.5 text-right font-medium" style="color:${volCol}">${r.vol_ratio}×</td>
       <td class="px-4 py-2.5 text-center">
         <div style="display:flex;gap:4px;justify-content:center">
           <button onclick="addScannerToWL('${r.symbol}')" class="btn btn-primary" style="padding:3px 10px;font-size:12px">+ WL</button>
@@ -1074,11 +1074,11 @@ function _renderSim() {
   const tbody = document.getElementById('sim-tbody');
   if (!tbody || !_simResult || !_simResult.length) return;
   tbody.innerHTML = _simResult.map(row=>{
-    const wc = row.win_rate>=60?'#4ade80':row.win_rate>=45?'#fbbf24':'#f87171';
-    const rc = row.avg_return>=1?'#4ade80':row.avg_return>=0?'#fbbf24':'#f87171';
+    const wc = row.win_rate>=60?'#16a34a':row.win_rate>=45?'#d97706':'#dc2626';
+    const rc = row.avg_return>=1?'#16a34a':row.avg_return>=0?'#d97706':'#dc2626';
     return `<tr class="border-b border-gray-200">
       <td class="px-4 py-3"><span style="color:${row.hex};font-weight:600">${row.label}</span></td>
-      <td class="px-4 py-3 text-right text-gray-300">${row.count}</td>
+      <td class="px-4 py-3 text-right text-gray-700">${row.count}</td>
       <td class="px-4 py-3 text-right font-semibold" style="color:${wc}">${row.win_rate}%</td>
       <td class="px-4 py-3 text-right font-semibold" style="color:${rc}">${row.avg_return>0?'+':''}${row.avg_return}%</td>
       <td class="px-4 py-3 text-right text-green-400">+${row.best}%</td>
@@ -1191,23 +1191,23 @@ function _renderPipeline() {
   if (countEl) countEl.textContent = `${ready.length} of ${all.length} READY`;
 
   tbody.innerHTML = ready.length ? ready.map((r,i)=>{
-    const bg = i%2===0?'':'background:#111118';
-    const retColor = r.avg_return>=1?'#4ade80':r.avg_return>=0?'#fbbf24':'#f87171';
+    const bg = i%2===0?'':'background:#f9fafb';
+    const retColor = r.avg_return>=1?'#16a34a':r.avg_return>=0?'#d97706':'#dc2626';
     return `<tr class="border-b border-gray-200" style="${bg}">
-      <td class="px-4 py-2.5 font-bold text-white">${r.symbol}</td>
-      <td class="px-4 py-2.5 text-right text-green-400 font-semibold">${r.win_rate}%</td>
+      <td class="px-4 py-2.5 font-bold text-gray-900">${r.symbol}</td>
+      <td class="px-4 py-2.5 text-right text-green-700 font-semibold">${r.win_rate}%</td>
       <td class="px-4 py-2.5 text-right font-semibold" style="color:${retColor}">${r.avg_return>0?'+':''}${r.avg_return}%</td>
-      <td class="px-4 py-2.5 text-right text-gray-200">${r.profit_factor}</td>
-      <td class="px-4 py-2.5 text-right text-gray-300">${r.total_trades}</td>
-      <td class="px-4 py-2.5 text-right text-red-400">${r.max_drawdown}%</td>
-      <td class="px-4 py-2.5 text-right text-xs"><span class="text-green-400">+${r.best_trade}%</span> / <span class="text-red-400">${r.worst_trade}%</span></td>
+      <td class="px-4 py-2.5 text-right text-gray-700">${r.profit_factor}</td>
+      <td class="px-4 py-2.5 text-right text-gray-700">${r.total_trades}</td>
+      <td class="px-4 py-2.5 text-right text-red-600">${r.max_drawdown}%</td>
+      <td class="px-4 py-2.5 text-right text-xs"><span class="text-green-700">+${r.best_trade}%</span> / <span class="text-red-600">${r.worst_trade}%</span></td>
       <td class="px-4 py-2.5 text-center text-xs text-gray-500">${r.run_at?r.run_at.slice(0,10):'—'}</td>
     </tr>`;
   }).join('') : '<tr><td colspan="8" class="text-center py-6 text-gray-500">No symbols passed all thresholds yet</td></tr>';
 
   if (failed.length) {
-    failedList.innerHTML = failed.map(r=>`<span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:11px;background:#1a1a24;color:#6b7280;border:1px solid #252535" title="${r.fail_reason||''}">
-      ${r.symbol} <span style="color:#f87171;margin-left:4px">${r.win_rate}%wr</span></span>`).join('');
+    failedList.innerHTML = failed.map(r=>`<span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:11px;background:#f3f4f6;color:#6b7280;border:1px solid #d1d5db" title="${r.fail_reason||''}">
+      ${r.symbol} <span style="color:#dc2626;margin-left:4px">${r.win_rate}%wr</span></span>`).join('');
     failedSec.classList.remove('hidden');
   }
   sec.classList.remove('hidden');
@@ -1277,19 +1277,19 @@ async function loadWatchlist() {
       const barFill = bsh==='BUY'?'#4ade80':bsh==='SELL'?'#f87171':'#fbbf24';
       const chgClass = q.change_pct>=0?'pnl-pos':'pnl-neg';
       const chgPrefix = q.change_pct>=0?'+':'';
-      const rsiColor = q.rsi<30?'text-green-400':q.rsi>70?'text-red-400':'text-gray-300';
+      const rsiColor = q.rsi<30?'text-green-600':q.rsi>70?'text-red-600':'text-gray-700';
       return `<tr class="${i%2===0?'':'even'} cursor-pointer" onclick="analyzeSymbol('${q.symbol}')">
-        <td class="px-4 py-3 font-semibold text-white">${q.symbol}</td>
-        <td class="px-4 py-3 text-right font-mono">${fmt$(q.price)}</td>
+        <td class="px-4 py-3 font-semibold text-gray-900">${q.symbol}</td>
+        <td class="px-4 py-3 text-right font-mono text-gray-900">${fmt$(q.price)}</td>
         <td class="px-4 py-3 text-right font-mono ${chgClass}">${chgPrefix}${fmtPct(q.change_pct)}</td>
         <td class="px-4 py-3 text-right font-mono ${rsiColor}">${q.rsi?Number(q.rsi).toFixed(1):'—'}</td>
         <td class="px-4 py-3">
           <div style="display:flex;align-items:center;gap:8px">
             <span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700;background:${bshBg};color:${bshColor};border:1px solid ${bshBdr};min-width:42px;justify-content:center">${bsh}</span>
-            <div style="flex:1;height:6px;border-radius:99px;background:#252535;overflow:hidden;min-width:60px">
+            <div style="flex:1;height:6px;border-radius:99px;background:#e5e7eb;overflow:hidden;min-width:60px">
               <div style="height:100%;width:${score}%;background:${barFill};border-radius:99px;transition:width 0.4s"></div>
             </div>
-            <span style="font-size:12px;color:#9ca3af;width:32px;text-align:right">${score}/100</span>
+            <span style="font-size:12px;color:#374151;width:32px;text-align:right">${score}/100</span>
           </div>
         </td>
         <td class="px-4 py-3 text-center" onclick="event.stopPropagation()">
@@ -1344,40 +1344,40 @@ async function analyzeSymbol(sym) {
     const barFill = bsh==='BUY'?'#4ade80':bsh==='SELL'?'#f87171':'#fbbf24';
     document.getElementById('sig-modal-body').innerHTML = `
       <div class="grid grid-cols-3 gap-3 mb-4">
-        <div class="bg-gray-900 rounded-lg p-3 text-center">
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
           <p class="text-xs text-gray-500">Price</p>
-          <p class="text-lg font-bold">${fmt$(s.price)}</p>
+          <p class="text-lg font-bold text-gray-900">${fmt$(s.price)}</p>
         </div>
-        <div class="bg-gray-900 rounded-lg p-3 text-center">
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
           <p class="text-xs text-gray-500">RSI(14)</p>
-          <p class="text-lg font-bold ${s.rsi<30?'pnl-pos':s.rsi>70?'pnl-neg':'text-white'}">${s.rsi?.toFixed(1)||'—'}</p>
+          <p class="text-lg font-bold ${s.rsi<30?'pnl-pos':s.rsi>70?'pnl-neg':'text-gray-900'}">${s.rsi?.toFixed(1)||'—'}</p>
         </div>
-        <div class="bg-gray-900 rounded-lg p-3 text-center">
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
           <p class="text-xs text-gray-500 mb-1">BSH Score</p>
           <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
             <span style="font-size:18px;font-weight:800;color:${bshColor}">${bsh}</span>
-            <div style="width:100%;height:6px;border-radius:99px;background:#252535;overflow:hidden">
+            <div style="width:100%;height:6px;border-radius:99px;background:#e5e7eb;overflow:hidden">
               <div style="height:100%;width:${score}%;background:${barFill};border-radius:99px"></div>
             </div>
-            <span style="font-size:11px;color:#9ca3af">${score}/100</span>
+            <span style="font-size:11px;color:#6b7280">${score}/100</span>
           </div>
         </div>
       </div>
-      <div class="grid grid-cols-2 gap-3 mb-4 text-xs text-gray-400">
-        <div>MA20: <span class="text-white font-mono">${fmt$(s.ma20)}</span></div>
-        <div>MA50: <span class="text-white font-mono">${fmt$(s.ma50)}</span></div>
-        ${s.ma200?`<div>MA200: <span class="text-white font-mono">${fmt$(s.ma200)}</span></div>`:''}
-        <div>BB Upper: <span class="text-white font-mono">${fmt$(s.bb_upper)}</span></div>
-        <div>BB Lower: <span class="text-white font-mono">${fmt$(s.bb_lower)}</span></div>
-        <div>BB%: <span class="text-white font-mono">${s.bb_pct?.toFixed(1)||'—'}%</span></div>
+      <div class="grid grid-cols-2 gap-3 mb-4 text-xs text-gray-600">
+        <div>MA20: <span class="text-gray-900 font-mono">${fmt$(s.ma20)}</span></div>
+        <div>MA50: <span class="text-gray-900 font-mono">${fmt$(s.ma50)}</span></div>
+        ${s.ma200?`<div>MA200: <span class="text-gray-900 font-mono">${fmt$(s.ma200)}</span></div>`:''}
+        <div>BB Upper: <span class="text-gray-900 font-mono">${fmt$(s.bb_upper)}</span></div>
+        <div>BB Lower: <span class="text-gray-900 font-mono">${fmt$(s.bb_lower)}</span></div>
+        <div>BB%: <span class="text-gray-900 font-mono">${s.bb_pct?.toFixed(1)||'—'}%</span></div>
         <div>MACD Hist: <span class="${s.macd_hist>=0?'pnl-pos':'pnl-neg'} font-mono">${s.macd_hist?.toFixed(4)||'—'}</span></div>
-        <div>Vol Ratio: <span class="text-white font-mono">${s.vol_ratio?.toFixed(2)||'—'}x</span></div>
+        <div>Vol Ratio: <span class="text-gray-900 font-mono">${s.vol_ratio?.toFixed(2)||'—'}x</span></div>
       </div>
-      <h4 class="text-sm font-medium text-white mb-2">Signal Breakdown</h4>
+      <h4 class="text-sm font-medium text-gray-900 mb-2">Signal Breakdown</h4>
       ${(s.signals||[]).map(sig=>{
         const sc = sig.bias==='bullish'?'signal-bull':sig.bias==='bearish'?'signal-bear':'signal-neutral';
-        const tc = sig.bias==='bullish'?'text-green-400':sig.bias==='bearish'?'text-red-400':'text-gray-400';
-        return `<div class="signal-row ${sc}"><span class="text-sm text-gray-200">${sig.name}</span><span class="font-mono text-sm ${tc}">${sig.value}</span></div>`;
+        const tc = sig.bias==='bullish'?'text-green-700':sig.bias==='bearish'?'text-red-700':'text-gray-600';
+        return `<div class="signal-row ${sc}"><span class="text-sm text-gray-800">${sig.name}</span><span class="font-mono text-sm ${tc}">${sig.value}</span></div>`;
       }).join('')}
       <div class="mt-4 bg-gray-50 rounded-lg p-3">
         <p class="text-xs text-gray-500 mb-1">Suggested Setup</p>
@@ -1795,8 +1795,8 @@ function drawBtCharts(r) {
     maintainAspectRatio: true,
     plugins: { legend: { display: false }, tooltip: { mode:'index', intersect:false } },
     scales: {
-      x: { ticks: { color:'#6b7280', maxTicksLimit:8, maxRotation:0 }, grid: { color:'#1e1e2e' } },
-      y: { ticks: { color:'#6b7280' }, grid: { color:'#1e1e2e' } }
+      x: { ticks: { color:'#6b7280', maxTicksLimit:8, maxRotation:0 }, grid: { color:'#e5e7eb' } },
+      y: { ticks: { color:'#6b7280' }, grid: { color:'#e5e7eb' } }
     },
     elements: { point: { radius:0 }, line: { tension:0.2 } },
     animation: false,
@@ -1880,8 +1880,8 @@ function renderHistoryChart(monthly) {
       maintainAspectRatio:true,
       plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>`$${ctx.parsed.y.toFixed(2)}`}}},
       scales:{
-        x:{ticks:{color:'#6b7280'},grid:{color:'#1e1e2e'}},
-        y:{ticks:{color:'#6b7280',callback:v=>'$'+v},grid:{color:'#1e1e2e'}}
+        x:{ticks:{color:'#6b7280'},grid:{color:'#e5e7eb'}},
+        y:{ticks:{color:'#6b7280',callback:v=>'$'+v},grid:{color:'#e5e7eb'}}
       },
       animation:false,
     }
