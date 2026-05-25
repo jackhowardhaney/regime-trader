@@ -124,15 +124,23 @@
      TAB 1: WATCHLIST
      ══════════════════════════════════════════════════ -->
 <div id="page-watchlist">
-  <div class="flex items-center justify-between mb-4">
+  <div class="flex items-center justify-between mb-3">
     <div>
       <h1 class="text-xl font-semibold text-gray-900">Watchlist</h1>
-      <p class="text-sm text-gray-500 mt-0.5">Live quotes and technical signals. Click any row to analyze.</p>
+      <p class="text-sm text-gray-500 mt-0.5">20 best BUY + 10 best SELL picks daily, scored 0–100. Click any row to analyze.</p>
     </div>
-    <button onclick="openAddSymbol()" class="btn btn-primary">
-      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-      Add Symbol
-    </button>
+    <div class="flex items-center gap-2">
+      <span id="wl-buy-count" class="hidden text-xs font-semibold px-2.5 py-1 rounded-full bg-green-100 text-green-700"></span>
+      <span id="wl-sell-count" class="hidden text-xs font-semibold px-2.5 py-1 rounded-full bg-red-100 text-red-700"></span>
+      <button onclick="rescanWatchlist()" id="wl-scan-btn" class="btn btn-ghost text-xs py-1.5 px-3">&#8635; Rescan</button>
+      <button onclick="openAddSymbol()" class="btn btn-primary">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+        Add Symbol
+      </button>
+    </div>
+  </div>
+  <div class="flex items-center gap-3 mb-3">
+    <span id="wl-refresh-label" class="text-xs text-gray-400"></span>
   </div>
 
   <div class="card overflow-hidden">
@@ -1275,25 +1283,62 @@ async function loadPortfolio() {
 }
 
 // ── WATCHLIST ─────────────────────────────────────────────────────────
+async function rescanWatchlist() {
+  const btn = document.getElementById('wl-scan-btn');
+  btn.disabled = true; btn.textContent = 'Scanning…';
+  try {
+    await api('/api/watchlist/scan', {method:'POST'});
+    await loadWatchlist();
+  } catch(e) { showToast('Scan failed: '+e.message,'error'); }
+  btn.disabled = false; btn.innerHTML = '&#8635; Rescan';
+}
+
 async function loadWatchlist() {
   const tbody = document.getElementById('watchlist-body');
   try {
-    const quotes = await api('/api/watchlist/quotes');
+    const data = await api('/api/watchlist/quotes');
+    const quotes = data.quotes || data;   // backwards-compat if old shape
+    const lastRefresh = data.last_refresh;
+
+    // Update counts and refresh label
+    const buyCnt  = quotes.filter(q=>q.bsh==='BUY').length;
+    const sellCnt = quotes.filter(q=>q.bsh==='SELL').length;
+    const buyEl  = document.getElementById('wl-buy-count');
+    const sellEl = document.getElementById('wl-sell-count');
+    const lblEl  = document.getElementById('wl-refresh-label');
+    if(buyEl)  { buyEl.textContent  = buyCnt+' BUY';  buyEl.classList.toggle('hidden', buyCnt===0); }
+    if(sellEl) { sellEl.textContent = sellCnt+' SELL'; sellEl.classList.toggle('hidden', sellCnt===0); }
+    if(lblEl && lastRefresh) {
+      const d = new Date(lastRefresh); const now = new Date();
+      const diffH = Math.round((now-d)/3600000);
+      lblEl.textContent = 'Last scanned ' + (diffH<1?'just now':diffH+'h ago') + ' · refreshes daily';
+    }
+
     if(!quotes.length) {
-      tbody.innerHTML = '<tr><td colspan="7" class="text-center py-8 text-gray-500">No symbols — add one above.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center py-8 text-gray-500">Scan running — check back in a moment.</td></tr>';
       return;
     }
+    let lastBsh = null;
     tbody.innerHTML = quotes.map((q,i)=>{
       const bsh = q.bsh || (q.buy_pct>=60?'BUY':q.buy_pct<=40?'SELL':'HOLD');
       const score = Math.max(0,Math.min(100,q.buy_pct||50));
-      const bshColor = bsh==='BUY'?'#4ade80':bsh==='SELL'?'#f87171':'#fbbf24';
-      const bshBg   = bsh==='BUY'?'#14532d40':bsh==='SELL'?'#7f1d1d40':'#422006';
-      const bshBdr  = bsh==='BUY'?'#166534':bsh==='SELL'?'#991b1b':'#92400e';
-      const barFill = bsh==='BUY'?'#4ade80':bsh==='SELL'?'#f87171':'#fbbf24';
+      const bshColor = bsh==='BUY'?'#15803d':bsh==='SELL'?'#dc2626':'#b45309';
+      const bshBg   = bsh==='BUY'?'#f0fdf4':bsh==='SELL'?'#fef2f2':'#fffbeb';
+      const bshBdr  = bsh==='BUY'?'#86efac':bsh==='SELL'?'#fca5a5':'#fde68a';
+      const barFill = bsh==='BUY'?'#22c55e':bsh==='SELL'?'#ef4444':'#f59e0b';
       const chgClass = q.change_pct>=0?'pnl-pos':'pnl-neg';
       const chgPrefix = q.change_pct>=0?'+':'';
       const rsiColor = q.rsi<30?'text-green-600':q.rsi>70?'text-red-600':'text-gray-700';
-      return `<tr class="${i%2===0?'':'even'} cursor-pointer" onclick="analyzeSymbol('${q.symbol}')">
+      // Insert divider between BUY and SELL groups
+      let divider = '';
+      if (lastBsh === 'BUY' && bsh === 'SELL') {
+        divider = `<tr><td colspan="6" style="padding:4px 16px;background:#f8fafc;border-top:2px solid #e5e7eb;border-bottom:2px solid #e5e7eb"><span style="font-size:11px;font-weight:700;color:#dc2626;letter-spacing:1px;text-transform:uppercase">▼ Short / Avoid</span></td></tr>`;
+      } else if (i === 0) {
+        divider = `<tr><td colspan="6" style="padding:4px 16px;background:#f0fdf4;border-bottom:2px solid #86efac"><span style="font-size:11px;font-weight:700;color:#15803d;letter-spacing:1px;text-transform:uppercase">▲ Buy Candidates</span></td></tr>`;
+      }
+      lastBsh = bsh;
+      const bgStripe = bsh==='SELL' ? (i%2===0?'background:#fff5f5':'background:#fef2f2') : (i%2===0?'':'background:#f9fafb');
+      return divider + `<tr class="cursor-pointer" style="${bgStripe}" onclick="analyzeSymbol('${q.symbol}')">
         <td class="px-4 py-3 font-semibold text-gray-900">${q.symbol}</td>
         <td class="px-4 py-3 text-right font-mono text-gray-900">${fmt$(q.price)}</td>
         <td class="px-4 py-3 text-right font-mono ${chgClass}">${chgPrefix}${fmtPct(q.change_pct)}</td>
@@ -1301,10 +1346,10 @@ async function loadWatchlist() {
         <td class="px-4 py-3">
           <div style="display:flex;align-items:center;gap:8px">
             <span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700;background:${bshBg};color:${bshColor};border:1px solid ${bshBdr};min-width:42px;justify-content:center">${bsh}</span>
-            <div style="flex:1;height:6px;border-radius:99px;background:#e5e7eb;overflow:hidden;min-width:60px">
+            <div style="flex:1;height:6px;border-radius:99px;background:#e5e7eb;overflow:hidden;min-width:80px">
               <div style="height:100%;width:${score}%;background:${barFill};border-radius:99px;transition:width 0.4s"></div>
             </div>
-            <span style="font-size:12px;color:#374151;width:32px;text-align:right">${score}/100</span>
+            <span style="font-size:13px;font-weight:700;color:#111827;width:48px;text-align:right">${score}<span style="font-size:10px;color:#6b7280;font-weight:400">/100</span></span>
           </div>
         </td>
         <td class="px-4 py-3 text-center" onclick="event.stopPropagation()">

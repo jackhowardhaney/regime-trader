@@ -67,7 +67,14 @@ def init_db():
             CREATE TABLE IF NOT EXISTS watchlist (
                 symbol TEXT PRIMARY KEY,
                 added_at TEXT DEFAULT (datetime('now')),
-                notes TEXT
+                notes TEXT,
+                score INTEGER DEFAULT 50,
+                bsh TEXT DEFAULT 'HOLD',
+                auto_generated INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
             );
             CREATE TABLE IF NOT EXISTS plays (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,14 +125,108 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_sbt_symbol ON symbol_backtests(symbol, run_at DESC);
         """)
-        # Seed watchlist
-        count = conn.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0]
-        if count == 0:
-            for sym in ["SPY", "QQQ", "AAPL", "MSFT", "NVDA"]:
+        # Migrate existing watchlist table — add columns if missing
+        existing = [r[1] for r in conn.execute("PRAGMA table_info(watchlist)").fetchall()]
+        if "score" not in existing:
+            conn.execute("ALTER TABLE watchlist ADD COLUMN score INTEGER DEFAULT 50")
+        if "bsh" not in existing:
+            conn.execute("ALTER TABLE watchlist ADD COLUMN bsh TEXT DEFAULT 'HOLD'")
+        if "auto_generated" not in existing:
+            conn.execute("ALTER TABLE watchlist ADD COLUMN auto_generated INTEGER DEFAULT 0")
+
+
+_daily_scan_lock = threading.Lock()
+
+def run_daily_watchlist_scan(force: bool = False) -> int:
+    """
+    Score all 116 sector symbols, pick top 20 BUY + bottom 10 SELL (excluding
+    current plays). Replace auto-generated watchlist entries. Returns count added.
+    """
+    with _daily_scan_lock:
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        with get_db() as conn:
+            last = conn.execute(
+                "SELECT value FROM app_settings WHERE key='watchlist_scan_date'"
+            ).fetchone()
+            if not force and last and last["value"] == today:
+                return 0  # already ran today
+
+        try:
+            from data.sector_symbols import SYMBOL_SECTORS
+            from core.opportunity_scanner import score_symbol as _score_sym
+        except Exception:
+            return 0
+
+        # Get symbols currently in active/pending plays — exclude them
+        with get_db() as conn:
+            play_rows = conn.execute(
+                "SELECT symbol FROM plays WHERE status IN ('ACTIVE','PENDING')"
+            ).fetchall()
+        excluded = {r["symbol"] for r in play_rows}
+
+        universe = [s for s in SYMBOL_SECTORS.keys() if s not in excluded]
+
+        scored = []
+        end_dt   = datetime.utcnow()
+        start_dt = end_dt - timedelta(days=250)
+
+        for sym in universe:
+            try:
+                df = _load_bars(sym, days=250)
+                if df is None or len(df) < 50:
+                    continue
+                r = _score_sym(df, sym)
+                if r:
+                    scored.append(r)
+            except Exception:
+                continue
+
+        if not scored:
+            return 0
+
+        scored.sort(key=lambda x: x["score"], reverse=True)
+
+        # Top 20 BUY (score ≥ 55) + bottom 10 SELL (score ≤ 40)
+        buys  = [r for r in scored if r["score"] >= 55][:20]
+        sells = [r for r in sorted(scored, key=lambda x: x["score"])
+                 if r["score"] <= 40][:10]
+        picks = buys + sells
+
+        with get_db() as conn:
+            # Remove all auto-generated entries
+            conn.execute("DELETE FROM watchlist WHERE auto_generated=1")
+            for r in picks:
+                sym   = r["symbol"]
+                sc    = r["score"]
+                bsh   = "BUY" if sc >= 55 else "SELL"
                 try:
-                    conn.execute("INSERT INTO watchlist (symbol) VALUES (?)", (sym,))
+                    conn.execute(
+                        """INSERT OR REPLACE INTO watchlist
+                           (symbol, added_at, score, bsh, auto_generated)
+                           VALUES (?,datetime('now'),?,?,1)""",
+                        (sym, sc, bsh),
+                    )
                 except Exception:
                     pass
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings(key,value) VALUES('watchlist_scan_date',?)",
+                (today,),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO app_settings(key,value) VALUES('watchlist_scan_ts',?)",
+                (datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),),
+            )
+        return len(picks)
+
+
+def _background_daily_scan():
+    """Run on startup in a thread; re-runs if date changes."""
+    while True:
+        try:
+            run_daily_watchlist_scan()
+        except Exception:
+            pass
+        time.sleep(3600)  # check every hour; scan gate prevents re-runs same day
 
 
 # ── Pydantic models ────────────────────────────────────────────────
@@ -356,8 +457,16 @@ def get_signals(symbol: str) -> Dict:
         if vol_ratio > 1.5:
             signals.append({"name": "High Volume", "value": f"{vol_ratio:.1f}x avg", "bias": "neutral", "strength": "info"})
 
-        buy_pct = int(((score + 5) / 10) * 100)
-        buy_pct = max(0, min(100, buy_pct))
+        # Use opportunity_scanner composite score (0-100) for granular scoring
+        try:
+            from core.opportunity_scanner import score_symbol as _score_symbol
+            _scored = _score_symbol(hist, symbol)
+            if _scored:
+                buy_pct = int(_scored["score"])
+            else:
+                buy_pct = max(0, min(100, int(((score + 5) / 10) * 100)))
+        except Exception:
+            buy_pct = max(0, min(100, int(((score + 5) / 10) * 100)))
         overall = "BULLISH" if buy_pct >= 60 else "BEARISH" if buy_pct <= 40 else "NEUTRAL"
         bsh = "BUY" if buy_pct >= 60 else "SELL" if buy_pct <= 40 else "HOLD"
 
@@ -615,21 +724,49 @@ def del_watchlist(symbol: str):
 @app.get("/api/watchlist/quotes")
 def watchlist_quotes():
     with get_db() as conn:
-        symbols = [r["symbol"] for r in conn.execute("SELECT symbol FROM watchlist").fetchall()]
+        rows = conn.execute(
+            "SELECT symbol, score, bsh, auto_generated FROM watchlist"
+        ).fetchall()
+        scan_ts = conn.execute(
+            "SELECT value FROM app_settings WHERE key='watchlist_scan_ts'"
+        ).fetchone()
+    last_refresh = scan_ts["value"] if scan_ts else None
     results = []
-    for sym in symbols:
+    for row in rows:
+        sym = row["symbol"]
         q = get_quote(sym)
         if not q:
             continue
-        sig = get_signals(sym)
+        stored_score = row["score"] or 50
+        stored_bsh   = row["bsh"] or "HOLD"
+        # Use stored score for auto-generated entries; re-score manual entries live
+        if row["auto_generated"]:
+            buy_pct = stored_score
+            bsh     = stored_bsh
+            sig     = get_signals(sym)
+            rsi     = sig.get("rsi", 50)
+        else:
+            sig     = get_signals(sym)
+            buy_pct = sig.get("buy_pct", 50)
+            bsh     = sig.get("bsh", "HOLD")
+            rsi     = sig.get("rsi", 50)
         results.append({**q,
-                        "overall": sig.get("overall", "NEUTRAL"),
-                        "bsh": sig.get("bsh", "HOLD"),
-                        "rsi": sig.get("rsi", 50),
-                        "buy_pct": sig.get("buy_pct", 50)})
-    # Sort by buy_pct descending (highest conviction BUY first)
-    results.sort(key=lambda x: x.get("buy_pct", 50), reverse=True)
-    return results
+                        "overall": "BULLISH" if buy_pct >= 60 else "BEARISH" if buy_pct <= 40 else "NEUTRAL",
+                        "bsh": bsh,
+                        "rsi": rsi,
+                        "buy_pct": buy_pct,
+                        "auto_generated": bool(row["auto_generated"])})
+    # BUY first sorted by score desc, then SELL sorted by score asc
+    buys  = sorted([r for r in results if r["bsh"] == "BUY"],  key=lambda x: -x["buy_pct"])
+    sells = sorted([r for r in results if r["bsh"] == "SELL"], key=lambda x: x["buy_pct"])
+    holds = sorted([r for r in results if r["bsh"] == "HOLD"], key=lambda x: -x["buy_pct"])
+    return {"quotes": buys + sells + holds, "last_refresh": last_refresh}
+
+
+@app.post("/api/watchlist/scan")
+def trigger_watchlist_scan():
+    count = run_daily_watchlist_scan(force=True)
+    return {"added": count}
 
 
 @app.get("/api/signals/{symbol}")
@@ -1182,6 +1319,8 @@ def index():
 @app.on_event("startup")
 def startup():
     init_db()
+    t = threading.Thread(target=_background_daily_scan, daemon=True)
+    t.start()
 
 
 if __name__ == "__main__":
