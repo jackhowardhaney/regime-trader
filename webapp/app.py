@@ -790,60 +790,197 @@ def symbol_signals(symbol: str):
     return get_signals(symbol.upper())
 
 
-_NEWS_BULLISH = {"beat","surge","growth","upgrade","buy","strong","record","rally","gain","rise",
-                  "soar","jump","high","profit","outperform","positive","boost","expand","upside"}
-_NEWS_BEARISH = {"miss","drop","concern","risk","cut","loss","warning","downgrade","sell","decline",
-                  "fall","weak","slump","disappoint","below","fear","pressure","lawsuit","investigate"}
+_NEWS_BULLISH = {
+    "beat","surge","growth","upgrade","buy","strong","record","rally","gain","rise","soar","jump",
+    "high","profit","outperform","positive","boost","expand","upside","bull","breakout","momentum",
+    "revenue","earnings","guidance","raised","exceed","top","win","agreement","deal","partner",
+    "launch","approve","fda","cleared","awarded","contract","dividend","buyback","acquisition",
+    "beat estimates","above expectations","new high","all-time","accelerat","innovate","robust",
+}
+_NEWS_BEARISH = {
+    "miss","drop","concern","risk","cut","loss","warning","downgrade","sell","decline","fall",
+    "weak","slump","disappoint","below","fear","pressure","lawsuit","investigate","fraud","probe",
+    "recall","layoff","restructur","debt","bankrupt","default","fine","penalt","regulat","halt",
+    "suspend","delay","recall","shortage","tariff","sanction","litigation","class action","short",
+    "missed estimates","below expectations","new low","all-time low","violat","seize","crash",
+}
+
+def _news_sentiment(text: str) -> tuple:
+    words = set(text.lower().split())
+    bull = sum(1 for w in _NEWS_BULLISH if w in text.lower())
+    bear = sum(1 for w in _NEWS_BEARISH if w in text.lower())
+    if bull > bear:
+        return "BUY", "#16a34a", bull, bear
+    elif bear > bull:
+        return "SELL", "#dc2626", bull, bear
+    return "HOLD", "#d97706", bull, bear
+
+def _fetch_alpaca_news(sym: str, limit: int = 6) -> list:
+    try:
+        import requests as _req
+        resp = _req.get(
+            "https://data.alpaca.markets/v1beta1/news",
+            params={"symbols": sym, "limit": limit, "sort": "desc"},
+            headers={
+                "APCA-API-KEY-ID": os.getenv("ALPACA_API_KEY", ""),
+                "APCA-API-SECRET-KEY": os.getenv("ALPACA_SECRET_KEY", ""),
+            },
+            timeout=8,
+        )
+        out = []
+        for a in resp.json().get("news", []):
+            summary = a.get("summary") or a.get("headline") or ""
+            if len(summary) > 200: summary = summary[:197] + "…"
+            out.append({
+                "headline":  a.get("headline", ""),
+                "source":    a.get("source", "Alpaca News"),
+                "source_tag": "alpaca",
+                "url":       a.get("url", ""),
+                "summary":   summary,
+                "published": (a.get("created_at") or "")[:10],
+            })
+        return out
+    except Exception:
+        return []
+
+def _fetch_yahoo_rss(sym: str, limit: int = 5) -> list:
+    try:
+        import requests as _req
+        import xml.etree.ElementTree as ET
+        resp = _req.get(
+            f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={sym}&region=US&lang=en-US",
+            timeout=8, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        root = ET.fromstring(resp.text)
+        out = []
+        for item in root.findall(".//item")[:limit]:
+            title = item.findtext("title") or ""
+            link  = item.findtext("link") or ""
+            desc  = item.findtext("description") or ""
+            pub   = item.findtext("pubDate") or ""
+            # pubDate like "Mon, 25 May 2026 12:00:00 +0000" → "2026-05-25"
+            try:
+                from email.utils import parsedate
+                import calendar
+                pd_t = parsedate(pub)
+                pub_str = f"{pd_t[0]}-{pd_t[1]:02d}-{pd_t[2]:02d}" if pd_t else pub[:10]
+            except Exception:
+                pub_str = pub[:10]
+            if len(desc) > 200: desc = desc[:197] + "…"
+            out.append({
+                "headline":   title,
+                "source":     "Yahoo Finance",
+                "source_tag": "yahoo",
+                "url":        link,
+                "summary":    desc,
+                "published":  pub_str,
+            })
+        return out
+    except Exception:
+        return []
+
+def _fetch_google_rss(sym: str, limit: int = 5) -> list:
+    try:
+        import requests as _req
+        import xml.etree.ElementTree as ET
+        query = f"{sym} stock"
+        resp = _req.get(
+            "https://news.google.com/rss/search",
+            params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
+            timeout=8, headers={"User-Agent": "Mozilla/5.0"}
+        )
+        root = ET.fromstring(resp.text)
+        out = []
+        for item in root.findall(".//item")[:limit]:
+            title = item.findtext("title") or ""
+            link  = item.findtext("link") or ""
+            pub   = item.findtext("pubDate") or ""
+            source_el = item.find("{http://purl.org/rss/1.0/modules/content/}encoded")
+            source_name = "Google News"
+            # Extract publisher from title if formatted as "Headline - Publisher"
+            if " - " in title:
+                parts = title.rsplit(" - ", 1)
+                title, source_name = parts[0].strip(), parts[1].strip()
+            try:
+                from email.utils import parsedate
+                pd_t = parsedate(pub)
+                pub_str = f"{pd_t[0]}-{pd_t[1]:02d}-{pd_t[2]:02d}" if pd_t else pub[:10]
+            except Exception:
+                pub_str = pub[:10]
+            out.append({
+                "headline":   title,
+                "source":     source_name,
+                "source_tag": "google",
+                "url":        link,
+                "summary":    "",
+                "published":  pub_str,
+            })
+        return out
+    except Exception:
+        return []
+
+def _deduplicate(articles: list) -> list:
+    seen, out = [], []
+    for a in articles:
+        h = a["headline"].lower()
+        words = set(h.split())
+        duplicate = False
+        for s in seen:
+            overlap = len(words & s) / max(len(words | s), 1)
+            if overlap > 0.6:
+                duplicate = True
+                break
+        if not duplicate:
+            seen.append(words)
+            out.append(a)
+    return out
 
 @app.get("/api/news/{symbol}")
 def symbol_news(symbol: str):
     sym = symbol.upper()
-    cache_key = f"news:{sym}"
+    cache_key = f"news2:{sym}"
     now = time.time()
     cached = _cache.get(cache_key)
-    if cached and now - cached[1] < 1800:   # 30-min cache
+    if cached and now - cached[1] < 1800:
         return cached[0]
-    try:
-        import requests as _req
-        api_key    = os.getenv("ALPACA_API_KEY", "")
-        api_secret = os.getenv("ALPACA_SECRET_KEY", "")
-        resp = _req.get(
-            "https://data.alpaca.markets/v1beta1/news",
-            params={"symbols": sym, "limit": 3, "sort": "desc"},
-            headers={"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": api_secret},
-            timeout=8,
-        )
-        articles = resp.json().get("news", [])
-    except Exception:
-        articles = []
 
+    # Gather from all three sources in parallel
+    from concurrent.futures import ThreadPoolExecutor as _TPE
+    with _TPE(max_workers=3) as ex:
+        f_alp = ex.submit(_fetch_alpaca_news, sym, 6)
+        f_yah = ex.submit(_fetch_yahoo_rss,   sym, 5)
+        f_goo = ex.submit(_fetch_google_rss,  sym, 5)
+        raw = f_alp.result() + f_yah.result() + f_goo.result()
+
+    articles = _deduplicate(raw)[:10]
+
+    total_bull, total_bear = 0, 0
     result = []
-    for a in articles[:3]:
-        text = ((a.get("headline") or "") + " " + (a.get("summary") or "")).lower()
-        words = set(text.split())
-        bull = len(words & _NEWS_BULLISH)
-        bear = len(words & _NEWS_BEARISH)
-        if bull > bear:
-            sentiment, color = "BUY", "#16a34a"
-        elif bear > bull:
-            sentiment, color = "SELL", "#dc2626"
-        else:
-            sentiment, color = "HOLD", "#d97706"
-        summary = a.get("summary") or a.get("headline") or ""
-        if len(summary) > 180:
-            summary = summary[:177] + "…"
-        result.append({
-            "headline": a.get("headline", ""),
-            "source":   a.get("source", ""),
-            "url":      a.get("url", ""),
-            "summary":  summary,
-            "sentiment": sentiment,
-            "color":    color,
-            "published": (a.get("created_at") or "")[:10],
-        })
+    for a in articles:
+        text = a["headline"] + " " + a.get("summary", "")
+        sentiment, color, bull, bear = _news_sentiment(text)
+        total_bull += bull
+        total_bear += bear
+        result.append({**a, "sentiment": sentiment, "color": color})
 
-    _cache[cache_key] = (result, now)
-    return result
+    # Aggregate news score 0–100 (50 = neutral)
+    net = total_bull - total_bear
+    news_score = max(0, min(100, 50 + net * 4))
+    if news_score >= 60:
+        score_label, score_color = "Bullish", "#16a34a"
+    elif news_score <= 40:
+        score_label, score_color = "Bearish", "#dc2626"
+    else:
+        score_label, score_color = "Neutral", "#d97706"
+
+    payload = {
+        "articles":    result,
+        "news_score":  news_score,
+        "score_label": score_label,
+        "score_color": score_color,
+    }
+    _cache[cache_key] = (payload, now)
+    return payload
 
 
 # ── Plays routes ───────────────────────────────────────────────────
