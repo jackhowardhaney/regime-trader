@@ -376,18 +376,43 @@
   </div>
 
   <!-- Account summary -->
-  <div class="grid grid-cols-3 gap-4 mb-5" id="plays-summary">
+  <!-- Margin explainer banner -->
+  <div style="display:flex;align-items:flex-start;gap:12px;background:#eff6ff;border:1.5px solid #93c5fd;border-radius:12px;padding:14px 18px;margin-bottom:16px">
+    <svg style="width:20px;height:20px;color:#2563eb;flex-shrink:0;margin-top:1px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+    <div>
+      <p style="font-size:13px;font-weight:700;color:#1e40af;margin-bottom:4px">Why does Account Value differ from Capital Deployed?</p>
+      <p style="font-size:12px;color:#3b82f6;line-height:1.6">
+        <b>Account Value (Equity)</b> is your true net worth — cash + current market value of all open positions. This started at $100k.<br>
+        <b>Capital Deployed</b> is the gross cost of all open positions combined. Alpaca paper trading provides <b>2:1 overnight margin</b>, meaning your $100k equity can control up to $200k in positions — they lend you the other half.<br>
+        <b>So the gap isn't losses</b> — it's leverage. Your P&L risk is still capped to your equity. If positions move against you, losses come out of your $99k, not the borrowed margin.
+      </p>
+    </div>
+  </div>
+  <div class="grid grid-cols-5 gap-3 mb-5" id="plays-summary">
     <div class="card p-4">
-      <p class="text-xs text-gray-500 mb-1">Total Account Value</p>
-      <p class="text-2xl font-bold text-gray-900" id="ps-equity">—</p>
+      <p class="text-xs text-gray-500 mb-0.5">Account Value (Equity)</p>
+      <p class="text-xl font-bold text-gray-900" id="ps-equity">—</p>
+      <p class="text-xs text-gray-400 mt-1">Net worth · started $100k</p>
     </div>
     <div class="card p-4">
-      <p class="text-xs text-gray-500 mb-1">Day P&amp;L</p>
-      <p class="text-2xl font-bold" id="ps-day-pnl">—</p>
+      <p class="text-xs text-gray-500 mb-0.5">Capital Deployed</p>
+      <p class="text-xl font-bold text-gray-900" id="ps-invested">—</p>
+      <p class="text-xs text-gray-400 mt-1">Gross cost of open positions</p>
     </div>
     <div class="card p-4">
-      <p class="text-xs text-gray-500 mb-1">Overall Unrealized P&amp;L</p>
-      <p class="text-2xl font-bold" id="ps-total-pnl">—</p>
+      <p class="text-xs text-gray-500 mb-0.5">Margin Used</p>
+      <p class="text-xl font-bold text-indigo-600" id="ps-margin">—</p>
+      <p class="text-xs text-gray-400 mt-1">Deployed ÷ Equity (2× max)</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-gray-500 mb-0.5">Day P&amp;L</p>
+      <p class="text-xl font-bold" id="ps-day-pnl">—</p>
+      <p class="text-xs text-gray-400 mt-1">vs. yesterday's close</p>
+    </div>
+    <div class="card p-4">
+      <p class="text-xs text-gray-500 mb-0.5">Unrealized P&amp;L</p>
+      <p class="text-xl font-bold" id="ps-total-pnl">—</p>
+      <p class="text-xs text-gray-400 mt-1">Open positions vs. cost basis</p>
     </div>
   </div>
 
@@ -1541,6 +1566,13 @@ async function loadPlays() {
     renderClosedPlays(plays.filter(p=>p.status==='CLOSED'));
     if(port && port.connected) {
       document.getElementById('ps-equity').textContent = fmt$(port.equity);
+      const invested = port.invested ?? 0;
+      document.getElementById('ps-invested').textContent = fmt$(invested);
+      const equity = port.equity || 1;
+      const leverage = invested / equity;
+      const marginEl = document.getElementById('ps-margin');
+      marginEl.textContent = leverage.toFixed(2) + '×';
+      marginEl.style.color = leverage > 1.8 ? '#dc2626' : leverage > 1.2 ? '#d97706' : '#4f46e5';
       const dayPnl = port.day_pl ?? 0;
       const dayEl = document.getElementById('ps-day-pnl');
       dayEl.textContent = (dayPnl>=0?'+':'') + fmt$(dayPnl);
