@@ -81,20 +81,7 @@
 <div id="startup-modal" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.95);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)">
   <div style="background:linear-gradient(160deg,#0a0800,#1a1200,#0a0800);border:2px solid #92400e;border-radius:24px;padding:36px 40px;text-align:center;max-width:660px;width:95vw;box-shadow:0 0 100px rgba(251,191,36,0.25),0 0 40px rgba(251,191,36,0.1)">
 
-    <!-- Yeat Shrine -->
-    <div style="margin-bottom:28px">
-      <div style="font-size:10px;letter-spacing:4px;color:#b45309;text-transform:uppercase;margin-bottom:14px;font-weight:700">✦ &nbsp; Y E A T &nbsp; S H R I N E &nbsp; ✦</div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px" id="yeat-shrine-grid">
-        <div class="yeat-frame" style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000;display:flex;align-items:center;justify-content:center;font-size:32px">🔥</div>
-        <div class="yeat-frame" style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000;display:flex;align-items:center;justify-content:center;font-size:32px">👑</div>
-        <div class="yeat-frame" style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000;display:flex;align-items:center;justify-content:center;font-size:32px">💰</div>
-        <div class="yeat-frame" style="aspect-ratio:1;border:2px solid #92400e;border-radius:10px;overflow:hidden;background:#1a1000;display:flex;align-items:center;justify-content:center;font-size:32px">⚡</div>
-      </div>
-      <div style="font-size:36px;font-weight:900;color:#fbbf24;letter-spacing:6px;text-shadow:0 0 30px rgba(251,191,36,0.8)">YEAT</div>
-      <div style="font-size:11px;color:#92400e;margin-top:4px;letter-spacing:2px">GOAT · TWIZZY RICH · 4L</div>
-    </div>
-
-    <div style="border-top:1px solid #78350f;padding-top:24px">
+    <div style="padding-top:8px">
       <div style="font-size:36px;margin-bottom:10px">🖨️</div>
       <h2 style="font-size:26px;font-weight:800;color:#fbbf24;margin-bottom:6px;letter-spacing:-0.5px">Ready to print?</h2>
       <p style="color:#78350f;font-size:13px;margin-bottom:24px">Regime Trader is loading your portfolio</p>
@@ -2117,31 +2104,8 @@ function closeStartup() {
   }
 }
 
-// ── Yeat shrine images (iTunes API) ───────────────────────────────────
-async function loadYeatImages() {
-  try {
-    const res = await fetch('https://itunes.apple.com/search?term=yeat&entity=album&limit=20&country=us');
-    const data = await res.json();
-    const frames = document.querySelectorAll('.yeat-frame');
-    let filled = 0;
-    for(const result of data.results) {
-      if(filled >= frames.length) break;
-      if(!result.artworkUrl100) continue;
-      const src = result.artworkUrl100.replace('100x100bb', '600x600bb');
-      const frame = frames[filled];
-      const img = document.createElement('img');
-      img.style.cssText = 'width:100%;height:100%;object-fit:cover';
-      img.src = src;
-      img.onerror = () => { /* keep emoji fallback */ };
-      img.onload = () => { frame.innerHTML = ''; frame.appendChild(img); };
-      filled++;
-    }
-  } catch(e) { /* keep emoji fallbacks */ }
-}
-
 // Boot
 loadPortfolio();
-loadYeatImages();
 switchTab('watchlist');
 setInterval(loadPortfolio, 30000);
 </script>
