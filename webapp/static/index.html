@@ -579,7 +579,7 @@
   </div>
 
   <!-- Run history -->
-  <div class="card overflow-hidden">
+  <div class="card overflow-hidden mb-6">
     <div class="px-4 py-3 border-b border-gray-200">
       <h3 class="font-medium text-gray-900">Past Runs</h3>
     </div>
@@ -599,6 +599,45 @@
         <tr><td colspan="7" class="text-center py-6 text-gray-500">No runs yet</td></tr>
       </tbody>
     </table>
+  </div>
+
+  <!-- ── Plays Backtest ── -->
+  <div class="card overflow-hidden">
+    <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+      <div>
+        <h3 class="font-medium text-gray-900">Plays Backtest</h3>
+        <p class="text-xs text-gray-500 mt-0.5">Each play vs. S&amp;P 500 and most correlated peer — from entry to today (or close date)</p>
+      </div>
+      <button onclick="refreshPlaysBacktest()" id="pbt-refresh-btn" class="btn btn-ghost text-xs">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Recompute
+      </button>
+    </div>
+    <div id="pbt-computing" class="hidden px-4 py-3 bg-blue-50 text-xs text-blue-600 flex items-center gap-2 border-b border-blue-100">
+      <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/></svg>
+      Computing correlations and peer returns — this runs in the background and may take a minute…
+    </div>
+    <div style="overflow-x:auto">
+    <table class="w-full text-sm" style="min-width:820px">
+      <thead>
+        <tr class="text-gray-500 text-xs uppercase tracking-wider bg-gray-50">
+          <th class="text-left px-4 py-3">Symbol</th>
+          <th class="text-left px-4 py-3">Status</th>
+          <th class="text-left px-4 py-3">Period</th>
+          <th class="text-left px-4 py-3">Days Held</th>
+          <th class="text-right px-4 py-3">Play Return</th>
+          <th class="text-right px-4 py-3">SPY Return</th>
+          <th class="text-right px-4 py-3">vs SPY</th>
+          <th class="text-left px-4 py-3">Closest Peer</th>
+          <th class="text-right px-4 py-3">Peer Return</th>
+          <th class="text-right px-4 py-3">vs Peer</th>
+        </tr>
+      </thead>
+      <tbody id="pbt-body">
+        <tr><td colspan="10" class="text-center py-6 text-gray-400">Loading…</td></tr>
+      </tbody>
+    </table>
+    </div>
   </div>
 </div>
 
@@ -878,6 +917,7 @@ function switchTab(t) {
     onBtSliderChange(document.getElementById('bt-period-slider').value);
     loadBtLatest();
     loadBtHistory();
+    loadPlaysBacktest();
   } else if(t==='history') {
     loadHistory();
   }
@@ -2260,6 +2300,93 @@ function closeStartup() {
       else if(++tries > 40) clearInterval(iv);
     }, 150);
   }
+}
+
+// ── Plays Backtest ────────────────────────────────────────────────────
+let _pbtPolling = false;
+
+async function loadPlaysBacktest() {
+  try {
+    const data = await api('/api/plays/backtests');
+    if (data.computing) {
+      document.getElementById('pbt-computing').classList.remove('hidden');
+      if (!_pbtPolling) _pollPlaysBacktest();
+    } else {
+      document.getElementById('pbt-computing').classList.add('hidden');
+    }
+    renderPlaysBacktest(data.results || []);
+  } catch(e) {
+    document.getElementById('pbt-body').innerHTML =
+      `<tr><td colspan="10" class="text-center py-6 text-red-400">${e.message}</td></tr>`;
+  }
+}
+
+function _pollPlaysBacktest() {
+  _pbtPolling = true;
+  const iv = setInterval(async () => {
+    try {
+      const data = await api('/api/plays/backtests');
+      renderPlaysBacktest(data.results || []);
+      if (!data.computing) {
+        document.getElementById('pbt-computing').classList.add('hidden');
+        _pbtPolling = false;
+        clearInterval(iv);
+      }
+    } catch(e) { _pbtPolling = false; clearInterval(iv); }
+  }, 5000);
+}
+
+async function refreshPlaysBacktest() {
+  document.getElementById('pbt-computing').classList.remove('hidden');
+  document.getElementById('pbt-body').innerHTML =
+    '<tr><td colspan="10" class="text-center py-6 text-gray-400">Recomputing…</td></tr>';
+  await api('/api/plays/backtests/refresh', {method:'POST'});
+  if (!_pbtPolling) _pollPlaysBacktest();
+}
+
+function renderPlaysBacktest(rows) {
+  const tbody = document.getElementById('pbt-body');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="10" class="text-center py-6 text-gray-400">No data yet — computing in background</td></tr>';
+    return;
+  }
+  const statusColor = {ACTIVE:'#16a34a', PENDING:'#d97706', CLOSED:'#6b7280'};
+  tbody.innerHTML = rows.map((r, i) => {
+    const bg = i % 2 === 1 ? 'background:#f9fafb' : '';
+    const playRet = r.play_ret;
+    const spyRet  = r.spy_ret;
+    const peerRet = r.peer_ret;
+    const vsSpyVal  = (playRet != null && spyRet  != null) ? playRet - spyRet  : null;
+    const vsPeerVal = (playRet != null && peerRet != null) ? playRet - peerRet : null;
+    const retColor = (v) => v == null ? '#6b7280' : v >= 0 ? '#16a34a' : '#dc2626';
+    const badge = (v) => {
+      if (v == null) return '<span style="color:#9ca3af">—</span>';
+      const c = v >= 0 ? '#dcfce7' : '#fee2e2';
+      const tc = v >= 0 ? '#16a34a' : '#dc2626';
+      return `<span style="background:${c};color:${tc};padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700">${v>=0?'+':''}${v.toFixed(2)}%</span>`;
+    };
+    // Compute days held
+    let daysHeld = '—';
+    if (r.entry_date && r.end_date) {
+      const ms = new Date(r.end_date) - new Date(r.entry_date);
+      if (!isNaN(ms)) daysHeld = Math.round(ms / 86400000) + 'd';
+    }
+    const sc = statusColor[r.status] || '#6b7280';
+    return `<tr style="${bg}">
+      <td class="px-4 py-3 font-semibold text-gray-900">${r.symbol}</td>
+      <td class="px-4 py-3">
+        <span style="background:${sc}22;color:${sc};padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700">${r.status || '—'}</span>
+      </td>
+      <td class="px-4 py-3 text-xs text-gray-500">${fmtDate(r.entry_date)} → ${r.status==='CLOSED'?fmtDate(r.end_date):'Today'}</td>
+      <td class="px-4 py-3 text-sm text-gray-700">${daysHeld}</td>
+      <td class="px-4 py-3 text-right font-bold" style="color:${retColor(playRet)}">${playRet!=null?(playRet>=0?'+':'')+playRet.toFixed(2)+'%':'—'}</td>
+      <td class="px-4 py-3 text-right" style="color:${retColor(spyRet)}">${spyRet!=null?(spyRet>=0?'+':'')+spyRet.toFixed(2)+'%':'—'}</td>
+      <td class="px-4 py-3 text-right">${badge(vsSpyVal)}</td>
+      <td class="px-4 py-3 text-sm text-gray-700">${r.peer_symbol||'—'}</td>
+      <td class="px-4 py-3 text-right" style="color:${retColor(peerRet)}">${peerRet!=null?(peerRet>=0?'+':'')+peerRet.toFixed(2)+'%':'—'}</td>
+      <td class="px-4 py-3 text-right">${badge(vsPeerVal)}</td>
+    </tr>`;
+  }).join('');
 }
 
 // Boot

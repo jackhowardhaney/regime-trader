@@ -125,6 +125,21 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_sbt_symbol ON symbol_backtests(symbol, run_at DESC);
         """)
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS play_backtests (
+                play_id     INTEGER PRIMARY KEY,
+                symbol      TEXT NOT NULL,
+                status      TEXT,
+                entry_date  TEXT,
+                end_date    TEXT,
+                play_ret    REAL,
+                spy_ret     REAL,
+                peer_symbol TEXT,
+                peer_ret    REAL,
+                beats_spy   INTEGER,
+                computed_at TEXT DEFAULT (datetime('now'))
+            );
+        """)
         # Migrate existing watchlist table — add columns if missing
         existing = [r[1] for r in conn.execute("PRAGMA table_info(watchlist)").fetchall()]
         if "score" not in existing:
@@ -1125,6 +1140,135 @@ def get_portfolio():
         }
     except Exception as e:
         return {"connected": False, "error": str(e)}
+
+
+def _compute_return_over_period(df: "pd.DataFrame", start: str, end: str) -> Optional[float]:
+    """Return pct return of close prices between start and end dates (inclusive)."""
+    try:
+        s = pd.Timestamp(start)
+        e = pd.Timestamp(end)
+        sub = df[(df.index >= s) & (df.index <= e)]
+        if len(sub) < 2:
+            # If start is before earliest bar, use earliest available
+            sub = df[df.index <= e]
+            if len(sub) < 2:
+                return None
+        return float((sub["close"].iloc[-1] - sub["close"].iloc[0]) / sub["close"].iloc[0] * 100)
+    except Exception:
+        return None
+
+
+def _find_peer(symbol: str, start: str, end: str, play_df: "pd.DataFrame") -> tuple:
+    """Find the most correlated peer in the same sector over the play period."""
+    try:
+        from data.sector_symbols import SYMBOL_SECTORS, SECTOR_SYMBOLS
+        sectors = SYMBOL_SECTORS.get(symbol, [])
+        if not sectors:
+            return None, None
+        candidates = []
+        for sec in sectors[:2]:
+            candidates.extend(SECTOR_SYMBOLS[sec]["symbols"])
+        candidates = [s for s in set(candidates) if s != symbol][:25]
+        s_ts = pd.Timestamp(start)
+        e_ts = pd.Timestamp(end)
+        play_sub = play_df[(play_df.index >= s_ts) & (play_df.index <= e_ts)]
+        if len(play_sub) < 5:
+            play_sub = play_df[play_df.index <= e_ts].tail(max(5, len(play_df)))
+        play_ret = play_sub["close"].pct_change().dropna()
+        best_sym, best_corr, best_ret = None, -2.0, None
+        for peer in candidates:
+            pdf = _load_bars(peer, days=400)
+            if pdf is None or pdf.empty:
+                continue
+            peer_sub = pdf[(pdf.index >= s_ts) & (pdf.index <= e_ts)]
+            if len(peer_sub) < 5:
+                peer_sub = pdf[pdf.index <= e_ts].tail(max(5, len(pdf)))
+            peer_ret_s = peer_sub["close"].pct_change().dropna()
+            aligned = play_ret.align(peer_ret_s, join="inner")[0]
+            if len(aligned) < 5:
+                continue
+            corr = float(play_ret.align(peer_ret_s, join="inner")[0].corr(
+                play_ret.align(peer_ret_s, join="inner")[1]
+            ))
+            if corr > best_corr:
+                peer_total = _compute_return_over_period(pdf, start, end)
+                best_sym, best_corr, best_ret = peer, corr, peer_total
+        return best_sym, best_ret
+    except Exception:
+        return None, None
+
+
+def _run_play_backtests():
+    """Compute per-play comparison vs SPY and closest peer. Stores in play_backtests."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    spy_df = _load_bars("SPY", days=400)
+    with get_db() as conn:
+        plays = conn.execute(
+            "SELECT id, symbol, status, entry_date, exit_date, created_at FROM plays"
+        ).fetchall()
+    results = []
+    for p in plays:
+        play_id = p["id"]
+        sym = p["symbol"]
+        status = p["status"]
+        start = p["entry_date"] or (p["created_at"] or today)[:10]
+        end = p["exit_date"][:10] if p["exit_date"] else today
+        play_df = _load_bars(sym, days=400)
+        if play_df is None:
+            continue
+        play_ret = _compute_return_over_period(play_df, start, end)
+        spy_ret = _compute_return_over_period(spy_df, start, end) if spy_df is not None else None
+        peer_sym, peer_ret = _find_peer(sym, start, end, play_df)
+        beats_spy = 1 if (play_ret is not None and spy_ret is not None and play_ret > spy_ret) else 0
+        results.append((play_id, sym, status, start, end,
+                         round(play_ret, 2) if play_ret is not None else None,
+                         round(spy_ret, 2) if spy_ret is not None else None,
+                         peer_sym,
+                         round(peer_ret, 2) if peer_ret is not None else None,
+                         beats_spy))
+    with get_db() as conn:
+        conn.execute("DELETE FROM play_backtests")
+        conn.executemany(
+            "INSERT INTO play_backtests (play_id,symbol,status,entry_date,end_date,"
+            "play_ret,spy_ret,peer_symbol,peer_ret,beats_spy) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            results
+        )
+
+
+_play_bt_lock = threading.Lock()
+_play_bt_last: float = 0.0
+
+
+@app.get("/api/plays/backtests")
+def get_play_backtests(force: bool = False):
+    global _play_bt_last
+    now = time.time()
+    stale = (now - _play_bt_last) > 3600
+    if (stale or force) and _play_bt_lock.acquire(blocking=False):
+        try:
+            _play_bt_last = now
+            threading.Thread(target=_compute_play_backtests_bg, daemon=True).start()
+        finally:
+            _play_bt_lock.release()
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT pb.*, p.signal, p.direction FROM play_backtests pb "
+            "LEFT JOIN plays p ON p.id = pb.play_id ORDER BY pb.entry_date DESC"
+        ).fetchall()
+    return {"results": [dict(r) for r in rows], "computing": stale or force}
+
+
+def _compute_play_backtests_bg():
+    try:
+        _run_play_backtests()
+    except Exception:
+        pass
+
+
+@app.post("/api/plays/backtests/refresh")
+def refresh_play_backtests():
+    threading.Thread(target=_compute_play_backtests_bg, daemon=True).start()
+    return {"status": "computing"}
 
 
 @app.get("/api/health")
