@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Regime Trader</title>
+<title>Twan Automatic Trader</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://www.youtube.com/iframe_api"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
@@ -84,7 +84,7 @@
     <div style="padding-top:8px">
       <div style="font-size:36px;margin-bottom:10px">🖨️</div>
       <h2 style="font-size:26px;font-weight:800;color:#fbbf24;margin-bottom:6px;letter-spacing:-0.5px">Ready to print?</h2>
-      <p style="color:#78350f;font-size:13px;margin-bottom:24px">Regime Trader is loading your portfolio</p>
+      <p style="color:#78350f;font-size:13px;margin-bottom:24px">Twan Automatic Trader is loading your portfolio</p>
       <button onclick="closeStartup()" style="background:linear-gradient(135deg,#b45309,#d97706,#b45309);color:#fff;border:none;border-radius:10px;padding:14px 56px;font-size:16px;font-weight:800;cursor:pointer;letter-spacing:1px;box-shadow:0 0 20px rgba(251,191,36,0.4);transition:all 0.15s" onmouseover="this.style.boxShadow='0 0 40px rgba(251,191,36,0.7)'" onmouseout="this.style.boxShadow='0 0 20px rgba(251,191,36,0.4)'">OK</button>
     </div>
 
@@ -98,7 +98,7 @@
       <svg class="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
       </svg>
-      <span class="font-semibold text-gray-900 text-lg tracking-tight">Regime Trader</span>
+      <span class="font-semibold text-gray-900 text-lg tracking-tight">Twan Automatic Trader</span>
       <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full ml-1">PAPER</span>
     </div>
     <!-- Tabs -->
@@ -1555,6 +1555,24 @@ async function loadPlays() {
   }
 }
 
+function convictionStatement(direction, signal) {
+  const dir = (direction || 'LONG').toUpperCase();
+  const s = (signal || '').toLowerCase();
+  const label = dir === 'SHORT' ? 'SHORT' : 'LONG';
+  const map = {
+    ema_bounce:          `${label} — price bounced off the 21-day EMA after a pullback, signaling short-term trend resumption`,
+    macd_cross:          `${label} — MACD line crossed above the signal line, confirming bullish momentum building`,
+    rsi_reset:           `${label} — RSI pulled back to oversold territory and reversed, offering a high-probability mean-reversion entry`,
+    golden_cross:        `${label} — 50-day MA crossed above the 200-day MA, a classic long-term trend confirmation signal`,
+    momentum_breakout:   `${label} — price broke out on above-average volume, indicating institutional accumulation`,
+    bb_breakout:         `${label} — price broke above the upper Bollinger Band with expanding volatility, signaling a strong directional move`,
+    volume_surge:        `${label} — unusual volume spike detected ahead of price move, suggesting smart money positioning`,
+    rsi_divergence:      `${label} — bullish RSI divergence vs. price lows indicates selling pressure is exhausting`,
+    swing:               `${label} — swing setup: favorable risk/reward on current technicals across multiple timeframes`,
+  };
+  return map[s] || `${label} — ${s || 'swing'} signal triggered with favorable risk/reward profile`;
+}
+
 function renderQueuedPlays(plays) {
   const sec = document.getElementById('plays-queued-section');
   const tbody = document.getElementById('plays-queued-body');
@@ -1570,7 +1588,7 @@ function renderQueuedPlays(plays) {
     return `<tr style="${bg}">
       <td class="brok-td-left">
         <div class="brok-ticker" style="color:#92400e">${p.symbol}</div>
-        <div class="brok-name">${p.direction} · ${p.signal || 'swing'}</div>
+        <div class="brok-name" style="font-size:11px;max-width:220px;line-height:1.4">${convictionStatement(p.direction, p.signal)}</div>
       </td>
       <td class="brok-td">${shares}</td>
       <td class="brok-td">${fmt$(entry)}</td>
@@ -1614,7 +1632,7 @@ function renderActivePlays(plays) {
     return `<tr style="${bg}">
       <td class="brok-td-left">
         <div class="brok-ticker">${p.symbol}</div>
-        <div class="brok-name">${p.direction} · ${p.signal || 'swing'}</div>
+        <div class="brok-name" style="font-size:11px;max-width:220px;line-height:1.4">${convictionStatement(p.direction, p.signal)}</div>
       </td>
       <td class="brok-td">${shares}</td>
       <td class="brok-td">${cur ? fmt$(cur) : '—'}</td>
