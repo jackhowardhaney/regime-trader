@@ -27,7 +27,7 @@ from data.market_data import MarketDataFetcher
 # ── Parameters ────────────────────────────────────────────────────────
 MIN_SCORE        = 65
 RISK_PCT         = 0.05    # 5% of equity risked per trade (max loss per play)
-MAX_POSITION_PCT = 0.20    # never spend more than 20% of equity on one position
+MAX_POSITION_PCT = 0.15    # never spend more than 15% of equity on one position
 ATR_STOP_MULT    = 1.5
 ATR_TARGET_MULT  = 3.75
 ATR_PERIOD       = 14
