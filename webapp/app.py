@@ -281,8 +281,9 @@ def _find_alpaca_exit_price(client, symbol: str, entry_date: str) -> Optional[fl
 def _sync_alpaca_plays():
     """Background thread: sync Alpaca positions/orders → DB every 10 minutes.
 
-    PENDING → ACTIVE  when Alpaca confirms the entry fill
-    ACTIVE  → CLOSED  when Alpaca no longer holds the position (stop/target hit)
+    - Discovers new Alpaca positions not yet in DB and creates ACTIVE records
+    - PENDING → ACTIVE  when Alpaca confirms the entry fill
+    - ACTIVE  → CLOSED  when Alpaca no longer holds the position (stop/target hit)
     """
     time.sleep(30)  # let webapp fully start before first sync
     while True:
@@ -294,6 +295,26 @@ def _sync_alpaca_plays():
                     open_plays = conn.execute(
                         "SELECT * FROM plays WHERE status IN ('PENDING','ACTIVE')"
                     ).fetchall()
+                    tracked_syms = {play["symbol"] for play in open_plays}
+
+                    # Discover new Alpaca positions not yet in DB
+                    for sym, pos in alpaca_positions.items():
+                        if sym not in tracked_syms:
+                            avg_entry = float(pos.get("avg_entry_price") or 0)
+                            qty = float(pos.get("qty") or 0)
+                            if avg_entry > 0 and qty > 0:
+                                conn.execute(
+                                    """INSERT INTO plays
+                                       (symbol, direction, status, entry_price, shares,
+                                        entry_date, signal, notes)
+                                       VALUES (?,?,?,?,?,?,?,?)""",
+                                    (sym, "LONG", "ACTIVE", avg_entry, qty,
+                                     datetime.utcnow().isoformat()[:10],
+                                     "auto-sync",
+                                     "Auto-discovered from Alpaca position sync"),
+                                )
+
+                    # Update existing plays
                     for play in open_plays:
                         sym = play["symbol"]
                         if sym in alpaca_positions:

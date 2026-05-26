@@ -204,15 +204,18 @@ def main():
             print(f"    {shares} sh @ ${price:.2f}  stop=${stop:.2f}  target=${target:.2f}")
             print(f"    cost=${cost:,.2f}  BP left=${buying_power:,.2f}")
 
-            # Record play in dashboard DB
+            # Record play in dashboard DB (only when WEBAPP_URL is configured)
             notes = f"score={score} cron=scan_now signals={','.join(signals)}"
-            _record_play(
-                symbol=sym, direction="LONG",
-                entry_price=price, stop_loss=stop, take_profit=target,
-                shares=shares, signal=signals[0] if signals else "composite",
-                notes=notes,
-            )
-            print(f"    Dashboard: recorded ✓\n")
+            if WEBAPP_URL:
+                _record_play(
+                    symbol=sym, direction="LONG",
+                    entry_price=price, stop_loss=stop, take_profit=target,
+                    shares=shares, signal=signals[0] if signals else "composite",
+                    notes=notes,
+                )
+                print(f"    Dashboard: recorded ✓\n")
+            else:
+                print(f"    Dashboard: skipped (WEBAPP_URL not set — sync will discover)\n")
         except Exception as e:
             print(f"  ✗ {sym} failed: {e}\n")
 
