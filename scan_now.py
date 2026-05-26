@@ -94,6 +94,28 @@ def main():
     )
     client.connect()
 
+    # ── Set PDT check to EXIT-only so entry orders are never blocked ───
+    # Alpaca rejects bracket orders preemptively if the account *could*
+    # become PDT-flagged. EXIT mode only checks on sell orders, leaving
+    # swing-trade entries unblocked. Safe for paper; swing trades aren't
+    # same-day round trips so exits won't trigger it either.
+    try:
+        from alpaca.trading.models import AccountConfiguration
+        from alpaca.trading.enums import PDTCheck
+        current = client._trading.get_account_configurations()
+        client._trading.set_account_configurations(AccountConfiguration(
+            dtbp_check=current.dtbp_check,
+            fractional_trading=current.fractional_trading,
+            max_margin_multiplier=current.max_margin_multiplier,
+            no_shorting=current.no_shorting,
+            pdt_check=PDTCheck.EXIT,
+            suspend_trade=current.suspend_trade,
+            trade_confirm_email=current.trade_confirm_email,
+            ptp_no_exception_entry=current.ptp_no_exception_entry,
+        ))
+    except Exception:
+        pass
+
     # ── Market hours check — exit cleanly if market is closed ──
     clock = client.get_clock()
     if not clock.get("is_open", False):
