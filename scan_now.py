@@ -25,13 +25,14 @@ from core.regime_strategies import Signal
 from data.market_data import MarketDataFetcher
 
 # ── Parameters ────────────────────────────────────────────────────────
-MIN_SCORE      = 65
-RISK_PCT       = 0.05      # 5% equity per trade
-ATR_STOP_MULT  = 1.5
-ATR_TARGET_MULT = 3.75
-ATR_PERIOD     = 14
-MAX_POSITIONS  = 15
-WEBAPP_URL     = os.getenv("WEBAPP_URL", "").rstrip("/")
+MIN_SCORE        = 65
+RISK_PCT         = 0.05    # 5% of equity risked per trade (max loss per play)
+MAX_POSITION_PCT = 0.20    # never spend more than 20% of equity on one position
+ATR_STOP_MULT    = 1.5
+ATR_TARGET_MULT  = 3.75
+ATR_PERIOD       = 14
+MAX_POSITIONS    = 15
+WEBAPP_URL       = os.getenv("WEBAPP_URL", "").rstrip("/")
 
 try:
     from data.sector_symbols import ALL_HANDPICK_SYMBOLS as SCAN_UNIVERSE
@@ -167,13 +168,26 @@ def main():
         if risk_ps <= 0:
             continue
 
+        # Refresh buying power from Alpaca before each order
+        try:
+            buying_power = float(client.get_account()["buying_power"])
+        except Exception:
+            pass
+
+        # Risk-based sizing: risk exactly RISK_PCT of equity
         shares = int((equity * RISK_PCT) / risk_ps)
         cost   = shares * price
-        if shares < 1 or cost > buying_power * 0.90:
-            shares = max(1, int(buying_power * 0.90 / price))
+
+        # Hard cap: never put more than MAX_POSITION_PCT of equity into one play.
+        # 20% cap = room for 5+ concurrent positions on any account size.
+        max_cost = equity * MAX_POSITION_PCT
+        if cost > max_cost:
+            shares = max(1, int(max_cost / price))
             cost   = shares * price
-        if shares < 1:
-            print(f"  {sym}: insufficient buying power — skip")
+
+        # Can't exceed available buying power
+        if shares < 1 or cost > buying_power * 0.95:
+            print(f"  {sym}: insufficient buying power (BP=${buying_power:,.0f}) — skip")
             continue
 
         signals = candidate.get("firing_signals", [])
@@ -197,8 +211,7 @@ def main():
                 strategy_name=signals[0] if signals else "composite",
             )
             record = executor.submit_bracket_order(signal)
-            buying_power -= cost
-            entered      += 1
+            entered += 1
             print(f"  ✓ ENTERED {sym}")
             print(f"    score={score}  signals={signals}")
             print(f"    {shares} sh @ ${price:.2f}  stop=${stop:.2f}  target=${target:.2f}")
