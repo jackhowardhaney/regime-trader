@@ -2062,15 +2062,6 @@ def _run_sim(symbols: List[str]) -> None:
 
 
 # ── Serve frontend ─────────────────────────────────────────────────
-@app.delete("/api/reset/all")
-def reset_all():
-    with get_db() as conn:
-        conn.execute("DELETE FROM plays")
-        conn.execute("DELETE FROM watchlist")
-        conn.execute("DELETE FROM play_backtests")
-    return {"status": "ok", "message": "All plays and watchlist cleared"}
-
-
 @app.get("/")
 def index():
     return FileResponse(str(STATIC_DIR / "index.html"))
