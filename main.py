@@ -45,7 +45,7 @@ _FEED_TIMEOUT_SEC = 120
 MIN_SCORE = 65          # minimum opportunity score to enter a play
 MIN_SCORE_FORCED = 52   # lower threshold when daily minimum not yet hit
 MAX_POSITIONS = 15      # hard cap on concurrent open plays
-RISK_PER_TRADE = 0.02   # 2% of equity risked per trade
+RISK_PER_TRADE = 0.05   # 5% of equity risked per trade ($500 risk on $10k)
 ATR_STOP_MULT = 1.5     # stop = entry - ATR * multiplier
 ATR_TARGET_MULT = 3.75  # target = entry + ATR * multiplier (2.5:1 R:R)
 ATR_PERIOD = 14
@@ -55,17 +55,20 @@ MIN_DAILY_ENTRIES = 2       # enter at least this many plays per trading day
 MIN_DEPLOYED_PCT  = 0.25    # keep at least 25% of equity in open positions at all times
 # When market is open and deployed < MIN_DEPLOYED_PCT, bot re-scans immediately
 # When daily entries < MIN_DAILY_ENTRIES by midday, threshold drops to MIN_SCORE_FORCED
-SCAN_SYMBOLS_DEFAULT = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD",
-    "JPM", "GS", "BAC", "MS", "V", "MA",
-    "XOM", "CVX", "SLB", "COP",
-    "EQIX", "AMT", "PLD",
-    "NUE", "CAT", "URI", "HON",
-    "TXN", "AVGO", "QCOM",
-    "UNH", "LLY", "JNJ", "ABBV",
-    "COIN", "IPGP", "PLTR", "MSTR",
-    "SPY", "QQQ", "IWM",
-]
+try:
+    from data.sector_symbols import ALL_HANDPICK_SYMBOLS as SCAN_SYMBOLS_DEFAULT
+except Exception:
+    SCAN_SYMBOLS_DEFAULT = [
+        "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD",
+        "JPM", "GS", "BAC", "MS", "V", "MA",
+        "XOM", "CVX", "SLB", "COP",
+        "EQIX", "AMT", "PLD",
+        "NUE", "CAT", "URI", "HON",
+        "TXN", "AVGO", "QCOM",
+        "UNH", "LLY", "JNJ", "ABBV",
+        "COIN", "IPGP", "PLTR", "MSTR",
+        "SPY", "QQQ", "IWM",
+    ]
 
 
 # ======================================================================
@@ -278,6 +281,9 @@ class SwingTrader:
         # Order tracking: symbol → OrderRecord
         self._open_order_records: Dict[str, object] = {}
 
+        # Scale-out tracking: symbols where 90% has already been sold at +7%
+        self._scaled_out_symbols: set = set()
+
         # Session metadata
         self._session_start: datetime = datetime.utcnow()
         self._bar_count: int = 0
@@ -439,8 +445,9 @@ class SwingTrader:
             logger.info("New trading day (%s-%s-%s) — running swing scan.", *bar_day)
             self._scan_and_enter()
 
-        # Update trailing stops on every bar
+        # Update trailing stops and check scale-out triggers on every bar
         self._update_trailing_stops()
+        self._check_scale_out()
 
         # Deployment check — if < 25% of equity deployed, scan immediately
         check_key = (bar_ts.year, bar_ts.month, bar_ts.day, bar_ts.hour)
@@ -564,7 +571,8 @@ class SwingTrader:
             return
 
         stop = round(price - atr * ATR_STOP_MULT, 2)
-        target = round(price + atr * ATR_TARGET_MULT, 2)
+        # Floor target at +7% so ATR doesn't set a target below the scale-out trigger
+        target = max(round(price + atr * ATR_TARGET_MULT, 2), round(price * 1.07, 2))
         risk_per_share = price - stop
         if risk_per_share <= 0:
             return
@@ -653,6 +661,58 @@ class SwingTrader:
                         self._position_tracker.set_stop(sym, new_stop)
             except Exception as exc:
                 logger.debug("Trailing stop update failed for %s: %s", sym, exc)
+
+    def _check_scale_out(self) -> None:
+        """Sell 90% of any position that has reached +7% gain, leaving a trailing runner."""
+        for sym, pos in self._position_tracker.get_all_positions().items():
+            if sym in self._scaled_out_symbols:
+                continue
+            entry = pos.entry_price
+            if entry <= 0:
+                continue
+            gain_pct = (pos.current_price - entry) / entry
+            if gain_pct < 0.07:
+                continue
+
+            total_qty = int(pos.qty)
+            if total_qty < 2:
+                self._scaled_out_symbols.add(sym)
+                continue
+
+            sell_qty = max(1, int(total_qty * 0.90))
+            keep_qty = total_qty - sell_qty
+            if keep_qty < 1:
+                sell_qty = total_qty - 1
+                keep_qty = 1
+
+            logger.info(
+                "SCALE-OUT %s: +%.1f%% — selling %d/%d shares @ ~$%.2f, keeping %d as runner",
+                sym, gain_pct * 100, sell_qty, total_qty, pos.current_price, keep_qty,
+            )
+
+            if self.dry_run:
+                self._scaled_out_symbols.add(sym)
+                continue
+
+            try:
+                from alpaca.trading.client import TradingClient
+                from alpaca.trading.enums import OrderSide, TimeInForce
+                from alpaca.trading.requests import MarketOrderRequest
+                tc = TradingClient(
+                    self.credentials["alpaca_api_key"],
+                    self.credentials["alpaca_secret_key"],
+                    paper=self.credentials["paper"],
+                )
+                order_req = MarketOrderRequest(
+                    symbol=sym,
+                    qty=sell_qty,
+                    side=OrderSide.SELL,
+                    time_in_force=TimeInForce.DAY,
+                )
+                tc.submit_order(order_req)
+                self._scaled_out_symbols.add(sym)
+            except Exception as exc:
+                logger.error("Scale-out order failed for %s: %s", sym, exc)
 
     # ------------------------------------------------------------------
     # Portfolio / state helpers

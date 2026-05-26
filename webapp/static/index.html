@@ -72,6 +72,7 @@
   .brok-th-left { color: #1d4ed8; font-size: 12px; font-weight: 600; text-align: left; padding: 10px 16px; border-bottom: 1px solid #e5e7eb; }
   .brok-td { font-size: 13px; padding: 12px 16px; text-align: right; border-bottom: 1px solid #f3f4f6; color: #111827; }
   .brok-td-left { font-size: 13px; padding: 12px 16px; text-align: left; border-bottom: 1px solid #f3f4f6; }
+  .config-pill { background: #e0e7ff; color: #3730a3; font-size: 11px; padding: 3px 9px; border-radius: 5px; font-weight: 500; white-space: nowrap; }
 </style>
 </head>
 <body class="h-full text-gray-900 antialiased">
@@ -374,6 +375,23 @@
     </button>
   </div>
 
+  <!-- Equity Curve -->
+  <div class="card overflow-hidden mb-5" id="plays-equity-card">
+    <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+      <div>
+        <h3 class="font-medium text-gray-900">Account Equity Curve</h3>
+        <p class="text-xs text-gray-500 mt-0.5">Cumulative P&amp;L from closed trades — new account started at $10,000</p>
+      </div>
+      <div id="plays-ec-stats" class="flex gap-6 text-sm"></div>
+    </div>
+    <div id="plays-ec-placeholder" class="px-4 py-8 text-center text-gray-400 text-sm">
+      No closed trades yet — equity curve will appear after first positions close
+    </div>
+    <div id="plays-ec-chart-wrap" class="hidden p-4">
+      <canvas id="plays-ec-chart" height="120"></canvas>
+    </div>
+  </div>
+
   <!-- Sub-tabs -->
   <div class="flex gap-4 mb-4 border-b border-gray-200">
     <button onclick="setPlaysTab('active')" id="plays-tab-active" class="tab-active pb-3 text-sm font-medium">Active</button>
@@ -387,8 +405,8 @@
     <div>
       <p style="font-size:13px;font-weight:700;color:#1e40af;margin-bottom:4px">Why does Account Value differ from Capital Deployed?</p>
       <p style="font-size:12px;color:#3b82f6;line-height:1.6">
-        <b>Account Value (Equity)</b> is your true net worth — cash + current market value of all open positions. This started at $100k.<br>
-        <b>Capital Deployed</b> is the gross cost of all open positions combined. Alpaca paper trading provides <b>2:1 overnight margin</b>, meaning your $100k equity can control up to $200k in positions — they lend you the other half.<br>
+        <b>Account Value (Equity)</b> is your true net worth — cash + current market value of all open positions. This started at $10k.<br>
+        <b>Capital Deployed</b> is the gross cost of all open positions combined. Alpaca paper trading provides <b>2:1 overnight margin</b>, meaning your $10k equity can control up to $20k in positions — they lend you the other half.<br>
         <b>So the gap isn't losses</b> — it's leverage. Your P&L risk is still capped to your equity. If positions move against you, losses come out of your $99k, not the borrowed margin.
       </p>
     </div>
@@ -397,7 +415,7 @@
     <div class="card p-4">
       <p class="text-xs text-gray-500 mb-0.5">Account Value (Equity)</p>
       <p class="text-xl font-bold text-gray-900" id="ps-equity">—</p>
-      <p class="text-xs text-gray-400 mt-1">Net worth · started $100k</p>
+      <p class="text-xs text-gray-400 mt-1">Net worth · started $10k</p>
     </div>
     <div class="card p-4">
       <p class="text-xs text-gray-500 mb-0.5">Capital Deployed</p>
@@ -492,6 +510,40 @@
       </table>
     </div>
   </div>
+
+  <!-- Trade Breakdown -->
+  <div class="card overflow-hidden mt-5">
+    <div class="px-4 py-3 border-b border-gray-200">
+      <h3 class="font-medium text-gray-900">Trade Breakdown</h3>
+      <p class="text-xs text-gray-500 mt-0.5">Every trade with risk/reward analysis and key metrics</p>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="w-full text-sm" style="min-width:900px">
+        <thead>
+          <tr class="text-gray-500 text-xs uppercase tracking-wider bg-gray-50">
+            <th class="text-left px-4 py-3">Symbol</th>
+            <th class="text-left px-4 py-3">Dir</th>
+            <th class="text-right px-4 py-3">Entry</th>
+            <th class="text-right px-4 py-3">Exit / Current</th>
+            <th class="text-right px-4 py-3">Shares</th>
+            <th class="text-right px-4 py-3">P&amp;L $</th>
+            <th class="text-right px-4 py-3">P&amp;L %</th>
+            <th class="text-right px-4 py-3">Stop Dist</th>
+            <th class="text-right px-4 py-3">Target Dist</th>
+            <th class="text-right px-4 py-3">R:R</th>
+            <th class="text-left px-4 py-3">Signal</th>
+            <th class="text-left px-4 py-3">Status</th>
+          </tr>
+        </thead>
+        <tbody id="plays-breakdown-body">
+          <tr><td colspan="12" class="text-center py-8 text-gray-400">No trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Bot Logic Slideshow -->
+  <div id="bot-info-plays" class="mt-6"></div>
 </div>
 
 <!-- ══════════════════════════════════════════════════
@@ -501,109 +553,24 @@
   <div class="flex items-center justify-between mb-4">
     <div>
       <h1 class="text-xl font-semibold text-gray-900">Backtesting</h1>
-      <p class="text-sm text-gray-500 mt-0.5">Swing signal backtest using live Alpaca data.</p>
+      <p class="text-sm text-gray-500 mt-0.5">Strategy research, 5-year simulation, forward testing &amp; per-play analysis.</p>
     </div>
   </div>
 
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-    <!-- Config panel -->
-    <div class="card p-5">
-      <h3 class="font-medium text-gray-900 mb-4">Configure Run</h3>
-      <div class="space-y-3">
-        <div>
-          <label class="block text-xs text-gray-500 mb-1">Symbols (comma-separated)</label>
-          <input id="bt-symbols" type="text" class="input" value="SPY,QQQ" />
-        </div>
-        <div>
-          <label class="block text-xs text-gray-500 mb-2">Lookback Period</label>
-          <input id="bt-period-slider" type="range" min="0" max="60" value="12"
-            class="w-full cursor-pointer" style="accent-color:#4f46e5;height:6px"
-            oninput="onBtSliderChange(this.value)" />
-          <div class="flex justify-between text-xs text-gray-500 mt-1">
-            <span>10 days</span>
-            <span id="bt-period-label" class="text-gray-900 font-semibold">1 year</span>
-            <span>5 years</span>
-          </div>
-          <div class="mt-2 text-xs text-gray-500 text-center" id="bt-period-dates"></div>
-        </div>
-        <button onclick="runBacktest()" id="bt-run-btn" class="btn btn-primary w-full justify-center">
-          Run Backtest
-        </button>
+  <!-- ── Strategy Research & Optimization ── -->
+  <div class="card overflow-hidden mb-6" id="research-card">
+    <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+      <div>
+        <h3 class="font-medium text-gray-900">Strategy Research &amp; Optimization</h3>
+        <p class="text-xs text-gray-500 mt-0.5">How we arrived at the current bot parameters — 12 combos tested across 5yr × 38 symbols, scale-out optimization completed</p>
       </div>
-
-      <!-- Progress -->
-      <div id="bt-progress-section" class="hidden mt-4">
-        <div class="flex justify-between text-xs text-gray-500 mb-1">
-          <span>Running…</span><span id="bt-pct">0%</span>
-        </div>
-        <div class="progress-bar">
-          <div class="progress-fill" id="bt-progress-bar" style="width:0%"></div>
-        </div>
-      </div>
-
-      <!-- Error -->
-      <div id="bt-error" class="hidden mt-3 text-xs text-red-400 bg-red-900/20 rounded-lg p-3"></div>
+      <button onclick="toggleResearchDetail()" id="research-toggle" class="btn btn-ghost text-xs">Show Details</button>
     </div>
-
-    <!-- Metrics panel -->
-    <div class="card p-5 col-span-2">
-      <h3 class="font-medium text-gray-900 mb-4">Latest Results</h3>
-      <div id="bt-metrics" class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-4">
-        <div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
-          <p class="text-xs text-gray-500">Total Return</p>
-          <p class="text-xl font-bold mt-1 text-gray-900" id="bt-m-ret">—</p>
-        </div>
-        <div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
-          <p class="text-xs text-gray-500">CAGR</p>
-          <p class="text-xl font-bold mt-1 text-gray-900" id="bt-m-cagr">—</p>
-        </div>
-        <div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
-          <p class="text-xs text-gray-500">Sharpe</p>
-          <p class="text-xl font-bold mt-1 text-gray-900" id="bt-m-sharpe">—</p>
-        </div>
-        <div class="bg-gray-50 rounded-lg p-3 border border-gray-200">
-          <p class="text-xs text-gray-500">Max Drawdown</p>
-          <p class="text-xl font-bold mt-1 text-red-600" id="bt-m-dd">—</p>
-        </div>
-      </div>
-      <!-- Regime breakdown -->
-      <div id="bt-regime" class="flex flex-wrap gap-2"></div>
-    </div>
-  </div>
-
-  <!-- Charts -->
-  <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-    <div class="card p-4">
-      <h3 class="font-medium text-gray-900 mb-3">Equity Curve</h3>
-      <canvas id="bt-equity-chart" height="200"></canvas>
-    </div>
-    <div class="card p-4">
-      <h3 class="font-medium text-gray-900 mb-3">Drawdown</h3>
-      <canvas id="bt-dd-chart" height="200"></canvas>
-    </div>
-  </div>
-
-  <!-- Run history -->
-  <div class="card overflow-hidden mb-6">
-    <div class="px-4 py-3 border-b border-gray-200">
-      <h3 class="font-medium text-gray-900">Past Runs</h3>
-    </div>
-    <table class="w-full text-sm">
-      <thead>
-        <tr class="text-gray-500 text-xs uppercase tracking-wider bg-gray-50">
-          <th class="text-left px-4 py-3">Date</th>
-          <th class="text-left px-4 py-3">Symbols</th>
-          <th class="text-left px-4 py-3">Period</th>
-          <th class="text-right px-4 py-3">Return</th>
-          <th class="text-right px-4 py-3">Sharpe</th>
-          <th class="text-right px-4 py-3">Max DD</th>
-          <th class="text-right px-4 py-3">Trades</th>
-        </tr>
-      </thead>
-      <tbody id="bt-history-body">
-        <tr><td colspan="7" class="text-center py-6 text-gray-500">No runs yet</td></tr>
-      </tbody>
-    </table>
+    <!-- Current config pills — populated by loadResearch() -->
+    <div id="research-config-row" class="hidden px-4 py-3 bg-indigo-50 border-b border-indigo-100"></div>
+    <!-- Research tables (collapsible) -->
+    <div id="research-detail" class="hidden"></div>
+    <div id="research-loading" class="px-4 py-6 text-center text-gray-400 text-xs">Loading research data…</div>
   </div>
 
   <!-- ── 5-Year Strategy Analysis ── -->
@@ -611,7 +578,7 @@
     <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
       <div>
         <h3 class="font-medium text-gray-900">5-Year Strategy vs S&amp;P 500</h3>
-        <p class="text-xs text-gray-500 mt-0.5">Bot's exact signal logic (score ≥65, +5% target / -3% stop / 10-day hold) run across 38 symbols over 5 years · with OLS regression, linear trend &amp; Monte Carlo</p>
+        <p class="text-xs text-gray-500 mt-0.5">Current bot params: ATR×1.5 stop · ATR×3.75 target (floor +7%) · scale-out 90% at +7% · score ≥65 · 38 symbols · OLS + Monte Carlo</p>
       </div>
       <button onclick="run5YBacktest()" id="s5y-btn" class="btn btn-primary text-xs">Run Analysis</button>
     </div>
@@ -640,7 +607,7 @@
       </div>
       <!-- Equity curve chart -->
       <div class="p-4 border-b border-gray-200">
-        <h4 class="text-sm font-semibold text-gray-900 mb-3">Equity Curve vs SPY Buy-and-Hold (starts $100k)</h4>
+        <h4 class="text-sm font-semibold text-gray-900 mb-3">Equity Curve vs SPY Buy-and-Hold (starts $10k)</h4>
         <canvas id="s5y-chart" height="140"></canvas>
       </div>
       <!-- Suggestions -->
@@ -689,6 +656,104 @@
     </table>
     </div>
   </div>
+
+  <!-- ── Forward Testing ── -->
+  <div class="card overflow-hidden mt-6">
+    <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+      <div>
+        <h3 class="font-medium text-gray-900">Forward Testing</h3>
+        <p class="text-xs text-gray-500 mt-0.5">Live paper trading performance — signals fired in real market conditions vs backtested expectations</p>
+      </div>
+      <span id="fwd-live-badge" class="hidden text-xs font-semibold px-2.5 py-1 rounded-full" style="background:#dcfce7;color:#16a34a">● LIVE</span>
+    </div>
+
+    <!-- Summary metrics -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-0 border-b border-gray-100" id="fwd-metrics">
+      <div style="padding:16px;border-right:1px solid #f3f4f6">
+        <p style="font-size:11px;color:#6b7280">Realized P&L</p>
+        <p style="font-size:20px;font-weight:700;margin-top:4px" id="fwd-pnl">—</p>
+      </div>
+      <div style="padding:16px;border-right:1px solid #f3f4f6">
+        <p style="font-size:11px;color:#6b7280">Open Positions</p>
+        <p style="font-size:20px;font-weight:700;margin-top:4px" id="fwd-open">—</p>
+      </div>
+      <div style="padding:16px;border-right:1px solid #f3f4f6">
+        <p style="font-size:11px;color:#6b7280">Win Rate</p>
+        <p style="font-size:20px;font-weight:700;margin-top:4px" id="fwd-wr">—</p>
+        <p style="font-size:11px;color:#9ca3af">BT target: ~43%</p>
+      </div>
+      <div style="padding:16px;border-right:1px solid #f3f4f6">
+        <p style="font-size:11px;color:#6b7280">Avg Win</p>
+        <p style="font-size:20px;font-weight:700;margin-top:4px;color:#16a34a" id="fwd-avg-win">—</p>
+        <p style="font-size:11px;color:#9ca3af">BT target: ~+4.9%</p>
+      </div>
+      <div style="padding:16px;border-right:1px solid #f3f4f6">
+        <p style="font-size:11px;color:#6b7280">Avg Loss</p>
+        <p style="font-size:20px;font-weight:700;margin-top:4px;color:#dc2626" id="fwd-avg-loss">—</p>
+        <p style="font-size:11px;color:#9ca3af">BT target: ~-2.8%</p>
+      </div>
+      <div style="padding:16px">
+        <p style="font-size:11px;color:#6b7280">Profit Factor</p>
+        <p style="font-size:20px;font-weight:700;margin-top:4px" id="fwd-pf">—</p>
+        <p style="font-size:11px;color:#9ca3af">BT target: ≥1.32</p>
+      </div>
+    </div>
+
+    <!-- Signal vs reality comparison banner -->
+    <div id="fwd-comparison" class="hidden px-4 py-3 border-b border-gray-100" style="background:#f8fafc">
+      <p style="font-size:12px;font-weight:600;color:#374151;margin-bottom:8px">Live vs Backtest Comparison</p>
+      <div class="grid grid-cols-3 gap-4" id="fwd-comp-grid"></div>
+    </div>
+
+    <!-- Active positions table -->
+    <div style="overflow-x:auto">
+    <table class="w-full text-sm" style="min-width:700px">
+      <thead>
+        <tr class="text-gray-500 text-xs uppercase tracking-wider bg-gray-50">
+          <th class="text-left px-4 py-3">Symbol</th>
+          <th class="text-left px-4 py-3">Signal</th>
+          <th class="text-right px-4 py-3">Entry</th>
+          <th class="text-right px-4 py-3">Current</th>
+          <th class="text-right px-4 py-3">Stop</th>
+          <th class="text-right px-4 py-3">Target</th>
+          <th class="text-right px-4 py-3">Unrealized P&L</th>
+          <th class="text-right px-4 py-3">Days</th>
+          <th class="text-right px-4 py-3">Status</th>
+        </tr>
+      </thead>
+      <tbody id="fwd-positions-body">
+        <tr><td colspan="9" class="text-center py-8 text-gray-400 text-sm">No active positions — bot will enter plays at Tuesday open</td></tr>
+      </tbody>
+    </table>
+    </div>
+
+    <!-- Closed trades mini log -->
+    <div class="border-t border-gray-100">
+      <div class="px-4 py-2 bg-gray-50 flex items-center justify-between">
+        <p style="font-size:12px;font-weight:600;color:#374151">Closed Forward Trades</p>
+        <span style="font-size:11px;color:#9ca3af" id="fwd-closed-count">0 trades</span>
+      </div>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-gray-500 text-xs uppercase tracking-wider border-b border-gray-100">
+            <th class="text-left px-4 py-2">Symbol</th>
+            <th class="text-right px-4 py-2">Entry</th>
+            <th class="text-right px-4 py-2">Exit</th>
+            <th class="text-right px-4 py-2">Return</th>
+            <th class="text-right px-4 py-2">Result</th>
+            <th class="text-left px-4 py-2">Date</th>
+          </tr>
+        </thead>
+        <tbody id="fwd-closed-body">
+          <tr><td colspan="6" class="text-center py-4 text-gray-400 text-xs">No closed forward trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Bot Logic Slideshow -->
+  <div id="bot-info-backtest" class="mt-6"></div>
+
 </div>
 
 <!-- ══════════════════════════════════════════════════
@@ -962,12 +1027,14 @@ function switchTab(t) {
     initScanner();
   } else if(t==='plays') {
     loadPlays();
+    loadPlaysEquityCurve();
+    initBotSlideshow('bot-info-plays');
     refreshTimer = setInterval(loadPlays, 15000);
   } else if(t==='backtest') {
-    onBtSliderChange(document.getElementById('bt-period-slider').value);
-    loadBtLatest();
-    loadBtHistory();
     loadPlaysBacktest();
+    loadResearch();
+    loadForwardTest();
+    initBotSlideshow('bot-info-backtest');
   } else if(t==='history') {
     loadHistory();
   }
@@ -1677,6 +1744,7 @@ async function loadPlays() {
     renderQueuedPlays(plays.filter(p=>p.status==='PENDING'));
     renderActivePlays(plays.filter(p=>p.status==='ACTIVE'));
     renderClosedPlays(plays.filter(p=>p.status==='CLOSED'));
+    renderTradeBreakdown(plays);
     if(port && port.connected) {
       document.getElementById('ps-equity').textContent = fmt$(port.equity);
       const invested = port.invested ?? 0;
@@ -1969,6 +2037,114 @@ async function deletePlay(id) {
   loadPlays();
 }
 
+// ── PLAYS EQUITY CURVE + BREAKDOWN ───────────────────────────────────
+let playsEcChart = null;
+
+async function loadPlaysEquityCurve() {
+  try {
+    const ec = await api('/api/plays/equity-curve');
+    const placeholder = document.getElementById('plays-ec-placeholder');
+    const chartWrap = document.getElementById('plays-ec-chart-wrap');
+    const statsEl = document.getElementById('plays-ec-stats');
+    if (!ec.dates || !ec.dates.length) {
+      if(placeholder) placeholder.classList.remove('hidden');
+      if(chartWrap) chartWrap.classList.add('hidden');
+      return;
+    }
+    if(placeholder) placeholder.classList.add('hidden');
+    if(chartWrap) chartWrap.classList.remove('hidden');
+    const starting = ec.starting || 10000;
+    const current = ec.values[ec.values.length - 1];
+    const totalPnl = current - starting;
+    const pnlPct = totalPnl / starting * 100;
+    const pnlColor = totalPnl >= 0 ? '#16a34a' : '#dc2626';
+    if(statsEl) statsEl.innerHTML = `
+      <div class="text-right"><p class="text-xs text-gray-500">Realized P&L</p><p class="font-bold" style="color:${pnlColor}">${totalPnl>=0?'+':''}${fmt$(totalPnl)}</p></div>
+      <div class="text-right"><p class="text-xs text-gray-500">Return</p><p class="font-bold" style="color:${pnlColor}">${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}%</p></div>
+      <div class="text-right"><p class="text-xs text-gray-500">Trades</p><p class="font-bold text-gray-900">${ec.dates.length}</p></div>
+    `;
+    if(playsEcChart) playsEcChart.destroy();
+    const allValues = [starting, ...ec.values];
+    const allLabels = ['Start', ...ec.dates];
+    const lineColor = totalPnl >= 0 ? '#16a34a' : '#dc2626';
+    const bgColor = totalPnl >= 0 ? 'rgba(22,163,74,0.08)' : 'rgba(220,38,38,0.08)';
+    playsEcChart = new Chart(document.getElementById('plays-ec-chart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: allLabels,
+        datasets: [{
+          data: allValues,
+          borderColor: lineColor,
+          backgroundColor: bgColor,
+          fill: true,
+          borderWidth: 2,
+          pointRadius: allValues.length <= 25 ? 3 : 0,
+          pointBackgroundColor: lineColor,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: { legend: { display: false }, tooltip: { mode:'index', intersect:false, callbacks: { label: ctx => fmt$(ctx.parsed.y) } } },
+        scales: {
+          x: { ticks: { color:'#6b7280', maxTicksLimit:10, maxRotation:0 }, grid: { color:'#f3f4f6' } },
+          y: { ticks: { color:'#6b7280', callback: v=>'$'+Number(v).toLocaleString() }, grid: { color:'#f3f4f6' } }
+        },
+        elements: { line: { tension: 0.2 }, point: { radius: 0 } },
+        animation: false,
+      }
+    });
+  } catch(e) {}
+}
+
+function renderTradeBreakdown(plays) {
+  const tbody = document.getElementById('plays-breakdown-body');
+  if (!plays || !plays.length) {
+    tbody.innerHTML = '<tr><td colspan="12" class="text-center py-8 text-gray-400">No trades yet</td></tr>';
+    return;
+  }
+  const sorted = [...plays].sort((a, b) => {
+    const da = a.exit_date || a.entry_date || a.created_at || '';
+    const db = b.exit_date || b.entry_date || b.created_at || '';
+    return db.localeCompare(da);
+  });
+  tbody.innerHTML = sorted.map((p, i) => {
+    const entry = p.entry_price || 0;
+    const stopDist  = entry > 0 && p.stop_loss   ? Math.abs(entry - p.stop_loss) : null;
+    const targetDist= entry > 0 && p.take_profit ? Math.abs(p.take_profit - entry) : null;
+    const rrNum  = stopDist && targetDist && stopDist > 0 ? targetDist / stopDist : null;
+    const rrStr  = rrNum != null ? rrNum.toFixed(2)+':1' : '—';
+    const rrColor= rrNum == null ? '#6b7280' : rrNum >= 2.5 ? '#16a34a' : rrNum >= 1.5 ? '#d97706' : '#dc2626';
+    let pnl = null, pnlPct = null;
+    if (p.status === 'CLOSED' && p.pnl != null) {
+      pnl = p.pnl; pnlPct = p.pnl_pct;
+    } else if (p.status === 'ACTIVE' && p.current_pnl != null) {
+      pnl = p.current_pnl;
+      pnlPct = entry > 0 && p.current_price ? (p.current_price - entry) / entry * 100 : null;
+    }
+    const pnlColor = pnl == null ? '#6b7280' : pnl >= 0 ? '#16a34a' : '#dc2626';
+    const exitDisplay = p.status === 'CLOSED' ? fmt$(p.exit_price)
+      : (p.current_price ? fmt$(p.current_price)+'<span style="font-size:10px;color:#9ca3af;margin-left:2px">now</span>' : '—');
+    const statusBg    = p.status === 'ACTIVE'  ? '#dcfce7' : p.status === 'PENDING' ? '#fef3c7' : '#f1f5f9';
+    const statusColor = p.status === 'ACTIVE'  ? '#15803d' : p.status === 'PENDING' ? '#92400e' : '#64748b';
+    const bg = i % 2 === 1 ? 'background:#f9fafb' : '';
+    return `<tr style="${bg}">
+      <td class="brok-td-left"><div class="brok-ticker">${p.symbol}</div></td>
+      <td class="brok-td-left"><span style="color:${(p.direction||'LONG')==='LONG'?'#16a34a':'#dc2626'};font-weight:600;font-size:12px">${p.direction||'LONG'}</span></td>
+      <td class="brok-td">${fmt$(entry)}</td>
+      <td class="brok-td">${exitDisplay}</td>
+      <td class="brok-td">${p.shares||0}</td>
+      <td class="brok-td" style="color:${pnlColor};font-weight:600">${pnl!=null?(pnl>=0?'+':'')+fmt$(pnl):'—'}</td>
+      <td class="brok-td" style="color:${pnlColor}">${pnlPct!=null?(pnlPct>=0?'+':'')+pnlPct.toFixed(2)+'%':'—'}</td>
+      <td class="brok-td" style="color:#6b7280;font-size:12px">${stopDist ? fmt$(stopDist) : '—'}</td>
+      <td class="brok-td" style="color:#6b7280;font-size:12px">${targetDist ? fmt$(targetDist) : '—'}</td>
+      <td class="brok-td" style="color:${rrColor};font-weight:700">${rrStr}</td>
+      <td class="brok-td-left" style="font-size:12px;color:#6b7280">${p.signal||'—'}</td>
+      <td class="brok-td-left"><span style="display:inline-flex;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;background:${statusBg};color:${statusColor}">${p.status}</span></td>
+    </tr>`;
+  }).join('');
+}
+
 // ── BACKTEST ──────────────────────────────────────────────────────────
 async function loadBtLatest() {
   try {
@@ -2250,6 +2426,117 @@ async function exportHistory() {
   window.location = API + '/api/history/export';
 }
 
+// ── Bot Logic Slideshow ───────────────────────────────────────────────
+const BOT_SLIDES = [
+  {
+    icon: '🔍',
+    title: 'How the Bot Finds Trades',
+    body: 'Every morning at market open, the bot scans <strong>430 stocks</strong> across every sector and grades each one from 0–100. The score is based on five things: Trend (is it above its key moving averages?), Momentum (is it accelerating?), RSI (is it in the sweet spot — not overbought or oversold?), Volume (are a lot of people trading it today?), and Pattern (did something specific just trigger, like a MACD crossover or EMA bounce?). Only stocks that score <strong>65 or higher with at least one signal actively firing today</strong> get entered. Score alone isn\'t enough — something has to actually be happening right now.',
+  },
+  {
+    icon: '📐',
+    title: 'Position Sizing — Always Risk Exactly 5%',
+    body: 'Most beginners just throw money at a stock. This bot calculates it precisely. The rule is: <strong>risk 5% of the account per trade</strong> — that\'s $500 on a $10k account. It uses ATR (Average True Range — basically how much the stock moves on a typical day) to figure out where to place the stop, then works backwards to find the right number of shares. A volatile stock like TSLA might need a wider stop, so you\'d buy fewer shares. A steadier stock lets you buy more. Either way, the maximum you can lose on any single trade is $500.',
+  },
+  {
+    icon: '🎯',
+    title: 'The Bracket Order — 3 Orders Placed at Once',
+    body: 'When the bot enters a trade, it immediately places three orders at the same time: the <strong>buy</strong>, a <strong>stop loss</strong> (automatic sell if it drops too far), and a <strong>profit target</strong> (automatic sell when it hits the goal). Stop = 1.5× ATR below entry. Target = 3.75× ATR above entry, minimum +7%. That\'s roughly a 2.5-to-1 reward-to-risk ratio — for every $1 risked, the target pays $2.50. Alpaca executes all of this automatically. Once the bracket is placed, the bot doesn\'t need to watch the screen.',
+  },
+  {
+    icon: '💰',
+    title: 'Scale-Out at +7% — Lock In the Win',
+    body: 'Here\'s where it gets smart. When any position gains <strong>+7%</strong>, the bot automatically sells <strong>90% of the shares</strong> immediately at market price — banking the majority of the profit right there. The remaining 10% is kept as a "runner" with a trailing stop, in case the stock keeps climbing. This way, you always lock in the bulk of a winning trade even if it later reverses. You never give back a big gain by being greedy.',
+  },
+  {
+    icon: '📈',
+    title: 'Trailing Stop — Protect the Runner',
+    body: 'After the scale-out, and on all positions generally, the stop loss <strong>automatically moves up</strong> as the stock price rises. It always stays 1.5× ATR below wherever the price currently is. Critically, it can only go up — never back down. So if a stock climbs from $100 to $120, the stop climbs with it, locking in profit along the way. If the stock then drops back to $112, the stop triggers and you exit with a solid gain, not a loss.',
+  },
+  {
+    icon: '🧮',
+    title: 'Why a 43% Win Rate Is Still Profitable',
+    body: 'The bot wins less than half its trades — and that\'s completely fine. It\'s designed to <strong>win big and lose small</strong>. Average winning trade: <strong>+4.9%</strong>. Average losing trade: <strong>−2.8%</strong>. On 10 trades: 4 winners × $490 gained = $1,960. 6 losers × $280 lost = $1,680. Net profit: <strong>+$280</strong> over 10 trades, despite losing 6 of them. This is called asymmetric risk/reward and it\'s how professional traders think. You don\'t need to be right most of the time — you just need to make more when you\'re right than you lose when you\'re wrong.',
+  },
+  {
+    icon: '🛡️',
+    title: 'Built-In Safety Features',
+    body: 'The bot has several guardrails. <strong>Max 15 open positions</strong> — it never gets over-concentrated. A <strong>circuit breaker</strong> automatically stops new trades if losses in a single day or week get too large. It always tries to keep at least <strong>25% of the account deployed</strong> — if cash is sitting idle, it scans again immediately rather than doing nothing. After noon, if fewer than 2 trades were made that day, the score threshold drops slightly to 52 to make sure the money is always working.',
+  },
+];
+
+const _slideshows = {};
+
+function initBotSlideshow(containerId) {
+  const existing = _slideshows[containerId];
+  if (existing && existing.timer) clearInterval(existing.timer);
+  _slideshows[containerId] = { current: 0, paused: false };
+  _renderSlide(containerId);
+  _slideshows[containerId].timer = setInterval(() => {
+    const s = _slideshows[containerId];
+    if (s && !s.paused) {
+      s.current = (s.current + 1) % BOT_SLIDES.length;
+      _renderSlide(containerId);
+    }
+  }, 7000);
+}
+
+function _renderSlide(containerId) {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  const state = _slideshows[containerId];
+  if (!state) return;
+  const slide = BOT_SLIDES[state.current];
+  const n = BOT_SLIDES.length;
+  const i = state.current;
+  const dots = BOT_SLIDES.map((_, di) =>
+    `<button onclick="slideGoto('${containerId}',${di})" style="width:8px;height:8px;border-radius:50%;border:none;cursor:pointer;padding:0;transition:all 0.2s;background:${di===i?'#4f46e5':'#d1d5db'};transform:${di===i?'scale(1.25)':'scale(1)'}"></button>`
+  ).join('');
+
+  container.innerHTML = `
+    <div style="border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#fafafa"
+         onmouseenter="slidePause('${containerId}')" onmouseleave="slideResume('${containerId}')">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:#f3f4f6;border-bottom:1px solid #e5e7eb">
+        <div style="display:flex;align-items:center;gap:8px">
+          <svg style="width:14px;height:14px;color:#6366f1;flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span style="font-size:11px;font-weight:600;color:#6b7280;letter-spacing:0.05em;text-transform:uppercase">How This Bot Works</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:11px;color:#9ca3af">${i+1} of ${n}</span>
+          <button onclick="slidePrev('${containerId}')" style="background:#fff;border:1px solid #d1d5db;border-radius:6px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;color:#6b7280;line-height:1">‹</button>
+          <button onclick="slideNext('${containerId}')" style="background:#fff;border:1px solid #d1d5db;border-radius:6px;width:24px;height:24px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:14px;color:#6b7280;line-height:1">›</button>
+        </div>
+      </div>
+      <div style="padding:18px 20px">
+        <div style="display:flex;align-items:flex-start;gap:14px">
+          <div style="font-size:26px;line-height:1;flex-shrink:0;margin-top:1px">${slide.icon}</div>
+          <div>
+            <p style="font-size:13px;font-weight:700;color:#111827;margin:0 0 7px 0">${slide.title}</p>
+            <p style="font-size:12.5px;color:#4b5563;line-height:1.75;margin:0">${slide.body}</p>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:14px;padding-left:40px">${dots}</div>
+      </div>
+    </div>`;
+}
+
+function slideNext(id) {
+  const s = _slideshows[id]; if (!s) return;
+  s.current = (s.current + 1) % BOT_SLIDES.length;
+  _renderSlide(id);
+}
+function slidePrev(id) {
+  const s = _slideshows[id]; if (!s) return;
+  s.current = (s.current - 1 + BOT_SLIDES.length) % BOT_SLIDES.length;
+  _renderSlide(id);
+}
+function slideGoto(id, idx) {
+  const s = _slideshows[id]; if (!s) return;
+  s.current = idx; _renderSlide(id);
+}
+function slidePause(id)  { if (_slideshows[id]) _slideshows[id].paused = true; }
+function slideResume(id) { if (_slideshows[id]) _slideshows[id].paused = false; }
+
 // ── Init ──────────────────────────────────────────────────────────────
 function refreshAll() {
   const btn = document.getElementById('refresh-btn');
@@ -2260,8 +2547,8 @@ function refreshAll() {
   let p;
   if(active==='watchlist') p = loadWatchlist();
   else if(active==='scanner') p = Promise.resolve(initScanner());
-  else if(active==='plays') p = loadPlays();
-  else if(active==='backtest') p = Promise.all([loadBtLatest(), loadBtHistory()]);
+  else if(active==='plays') p = Promise.all([loadPlays(), loadPlaysEquityCurve()]);
+  else if(active==='backtest') p = Promise.all([loadPlaysBacktest(), loadResearch(), loadForwardTest()]);
   else if(active==='history') p = loadHistory();
   else p = Promise.resolve();
   Promise.all([p, loadPortfolio()]).finally(done);
@@ -2467,6 +2754,243 @@ function renderPlaysBacktest(rows) {
 }
 
 // ── 5-Year Strategy Backtest ─────────────────────────────────────────
+// ── Strategy Research ──────────────────────────────────────────────────
+let _researchLoaded = false;
+
+async function loadResearch() {
+  if (_researchLoaded) return;
+  try {
+    const d = await api('/api/strategy/research');
+    _researchLoaded = true;
+    const loading = document.getElementById('research-loading');
+    if (loading) loading.classList.add('hidden');
+
+    // Config pills
+    const cfg = d.current_config;
+    const row = document.getElementById('research-config-row');
+    if (row) {
+      row.classList.remove('hidden');
+      row.innerHTML = `<div class="flex flex-wrap gap-2 items-center">
+        <span style="font-size:11px;color:#4338ca;font-weight:700;margin-right:4px">CURRENT BOT CONFIG</span>
+        <span class="config-pill">Score ≥${cfg.score_threshold}</span>
+        <span class="config-pill">Stop: ATR×${cfg.atr_stop_mult}</span>
+        <span class="config-pill">Target: ATR×${cfg.atr_target_mult} (floor +${cfg.target_floor_pct}%)</span>
+        <span class="config-pill">Scale-out: ${cfg.scale_out_pct}% at +${cfg.target_floor_pct}%</span>
+        <span class="config-pill">Hold: ${cfg.hold_days} days max</span>
+        <span class="config-pill">Risk: ${cfg.risk_per_trade_pct}% per trade</span>
+      </div>`;
+    }
+
+    // Render research tables into detail div (hidden until toggled)
+    _renderResearchDetail(d);
+  } catch(e) {
+    const loading = document.getElementById('research-loading');
+    if (loading) loading.textContent = 'Could not load research data.';
+  }
+}
+
+function toggleResearchDetail() {
+  const detail = document.getElementById('research-detail');
+  const btn = document.getElementById('research-toggle');
+  if (!detail) return;
+  const hidden = detail.classList.contains('hidden');
+  detail.classList.toggle('hidden', !hidden);
+  if (btn) btn.textContent = hidden ? 'Hide Details' : 'Show Details';
+}
+
+function _renderResearchDetail(d) {
+  const spy5yr = d.spy_5yr_pct != null ? ` · SPY 5-yr B&H: +${d.spy_5yr_pct.toFixed(1)}%` : '';
+
+  const optRows = (d.optimizer_results || []).map((r, i) => {
+    const star = i === 0;
+    const rc = r.total_ret >= 0 ? '#16a34a' : '#dc2626';
+    return `<tr style="${star ? 'background:#f0fdf4' : ''}">
+      <td style="padding:7px 12px;font-size:12px;font-weight:${star?700:400}">${r.name}${star?' ★':''}</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px;color:${rc};font-weight:600">${r.total_ret>=0?'+':''}${r.total_ret.toFixed(1)}%</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px">${r.win_rate.toFixed(1)}%</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px;font-weight:${star?600:400}">${r.sharpe.toFixed(2)}</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px">${r.profit_factor.toFixed(2)}</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px;color:#dc2626">-${r.max_dd.toFixed(1)}%</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px">${r.n_trades.toLocaleString()}</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px">$${(r.final_equity/1000).toFixed(0)}k</td>
+    </tr>`;
+  }).join('');
+
+  const soRows = (d.scaleout_results || []).map(r => {
+    const rc = r.total_ret >= 0 ? '#16a34a' : '#dc2626';
+    return `<tr style="${r.current ? 'background:#f0fdf4' : ''}">
+      <td style="padding:7px 12px;font-size:12px;font-weight:${r.current?700:400}">${r.name}${r.current?' ← current':''}</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px;color:${rc};font-weight:600">${r.total_ret>=0?'+':''}${r.total_ret.toFixed(1)}%</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px;font-weight:${r.current?600:400}">${r.sharpe.toFixed(2)}</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px;color:#dc2626">-${r.max_dd.toFixed(1)}%</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px">${r.win_rate.toFixed(1)}%</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px">${r.pct_ran_past_7.toFixed(1)}%</td>
+      <td style="padding:7px 12px;text-align:right;font-size:12px;color:#16a34a">${r.avg_runner_ret>0?'+':''}${r.avg_runner_ret.toFixed(1)}%</td>
+    </tr>`;
+  }).join('');
+
+  const thStyle = 'padding:7px 12px;font-size:11px;color:#6b7280;font-weight:600;text-transform:uppercase;background:#f9fafb;border-bottom:2px solid #e5e7eb';
+  const thR = thStyle + ';text-align:right';
+
+  document.getElementById('research-detail').innerHTML = `
+    <div style="padding:16px;border-top:1px solid #e5e7eb">
+      <h4 style="font-size:13px;font-weight:600;color:#111827;margin-bottom:4px">12-Combo Parameter Optimizer</h4>
+      <p style="font-size:11px;color:#6b7280;margin-bottom:10px">5 years × 38 symbols · pre-score once, replay 12× · ranked by composite score (return×0.3 + Sharpe×30 + PF×20 + WR×1.5 − DD)${spy5yr}</p>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr>
+            <th style="${thStyle};text-align:left">Combo</th>
+            <th style="${thR}">5yr Return</th>
+            <th style="${thR}">Win Rate</th>
+            <th style="${thR}">Sharpe</th>
+            <th style="${thR}">PF</th>
+            <th style="${thR}">Max DD</th>
+            <th style="${thR}">Trades</th>
+            <th style="${thR}">Final $</th>
+          </tr></thead>
+          <tbody style="border-bottom:1px solid #e5e7eb">${optRows}</tbody>
+        </table>
+      </div>
+      <p style="font-size:11px;color:#9ca3af;margin-top:8px">Key finding: +7% target (#1, Sharpe 1.95, +681%) beats baseline +5% by letting winners run. Regime filter &amp; higher threshold cut trade volume and hurt compounding.</p>
+    </div>
+    <div style="padding:16px;border-top:1px solid #e5e7eb">
+      <h4 style="font-size:13px;font-weight:600;color:#111827;margin-bottom:4px">Scale-Out Optimization</h4>
+      <p style="font-size:11px;color:#6b7280;margin-bottom:10px">What % to sell at the +7% trigger — remainder trails with ATR ratchet stop · 5yr × 38 symbols</p>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr>
+            <th style="${thStyle};text-align:left">Variant</th>
+            <th style="${thR}">5yr Return</th>
+            <th style="${thR}">Sharpe</th>
+            <th style="${thR}">Max DD</th>
+            <th style="${thR}">Win Rate</th>
+            <th style="${thR}">Ran Past 7%</th>
+            <th style="${thR}">Avg Runner</th>
+          </tr></thead>
+          <tbody>${soRows}</tbody>
+        </table>
+      </div>
+      <p style="font-size:11px;color:#9ca3af;margin-top:8px">Key finding: Scale 90% preserves Sharpe (1.93 vs 2.01 hard exit) while capturing ~23% of trades that run past the trigger. Scale 50% collapses Sharpe to 1.11 — too much return variance.</p>
+    </div>`;
+}
+
+// ── Forward Testing ───────────────────────────────────────────────────
+async function loadForwardTest() {
+  try {
+    const [plays, metrics, portfolio] = await Promise.all([
+      api('/api/plays'),
+      api('/api/history/metrics'),
+      api('/api/portfolio'),
+    ]);
+
+    // Live badge
+    const badge = document.getElementById('fwd-live-badge');
+    if (badge && portfolio.connected) badge.classList.remove('hidden');
+
+    // Active positions table
+    const active = plays.filter(p => p.status === 'ACTIVE' || p.status === 'PENDING');
+    const posTbody = document.getElementById('fwd-positions-body');
+    if (posTbody) {
+      if (active.length === 0) {
+        posTbody.innerHTML = '<tr><td colspan="9" class="text-center py-8 text-gray-400 text-sm">No active positions — bot will enter plays at Tuesday open</td></tr>';
+      } else {
+        posTbody.innerHTML = active.map(p => {
+          const cur = p.current_price || p.entry_price || 0;
+          const entry = p.entry_price || 0;
+          const pnl = p.current_pnl || 0;
+          const pnlPct = entry > 0 ? (cur - entry) / entry * 100 : 0;
+          const pnlColor = pnl >= 0 ? '#16a34a' : '#dc2626';
+          const entryDate = (p.entry_date || '').slice(0, 10);
+          const days = entryDate ? Math.floor((Date.now() - new Date(entryDate)) / 86400000) : '—';
+          const scaleTag = p.notes && p.notes.includes('scale') ? '<span style="font-size:10px;background:#fef9c3;color:#854d0e;padding:1px 5px;border-radius:3px;margin-left:4px">scaled</span>' : '';
+          return `<tr>
+            <td style="padding:10px 16px;font-weight:600">${p.symbol}${scaleTag}</td>
+            <td style="padding:10px 16px;font-size:12px;color:#6b7280">${(p.signal||'—').replace(/_/g,' ')}</td>
+            <td style="padding:10px 16px;text-align:right">$${entry.toFixed(2)}</td>
+            <td style="padding:10px 16px;text-align:right;font-weight:600">$${cur.toFixed(2)}</td>
+            <td style="padding:10px 16px;text-align:right;color:#dc2626">$${(p.stop_loss||0).toFixed(2)}</td>
+            <td style="padding:10px 16px;text-align:right;color:#16a34a">$${(p.take_profit||0).toFixed(2)}</td>
+            <td style="padding:10px 16px;text-align:right;font-weight:600;color:${pnlColor}">${pnl>=0?'+':''}$${Math.abs(pnl).toFixed(2)} (${pnlPct>=0?'+':''}${pnlPct.toFixed(1)}%)</td>
+            <td style="padding:10px 16px;text-align:right">${days}</td>
+            <td style="padding:10px 16px;text-align:right"><span style="font-size:11px;padding:2px 7px;border-radius:4px;background:${p.status==='ACTIVE'?'#dcfce7':'#fef3c7'};color:${p.status==='ACTIVE'?'#16a34a':'#92400e'}">${p.status}</span></td>
+          </tr>`;
+        }).join('');
+      }
+    }
+
+    // Summary metrics
+    const closed = plays.filter(p => p.status === 'CLOSED');
+    const wins   = closed.filter(p => (p.pnl||0) > 0);
+    const losses = closed.filter(p => (p.pnl||0) <= 0);
+    const wr     = closed.length > 0 ? (wins.length / closed.length * 100) : null;
+    const avgWin  = wins.length   > 0 ? wins.reduce((s,p)=>(s+(p.pnl_pct||0)),0)/wins.length   : null;
+    const avgLoss = losses.length > 0 ? losses.reduce((s,p)=>(s+(p.pnl_pct||0)),0)/losses.length : null;
+    const pf = metrics.profit_factor || null;
+    const totalPnl = metrics.total_pnl || 0;
+    const unrealized = portfolio.unrealized_pnl || 0;
+
+    const set = (id, val, color) => {
+      const el = document.getElementById(id);
+      if (el) { el.textContent = val; if (color) el.style.color = color; }
+    };
+    set('fwd-pnl', totalPnl >= 0 ? `+$${totalPnl.toLocaleString('en-US',{maximumFractionDigits:0})}` : `-$${Math.abs(totalPnl).toLocaleString('en-US',{maximumFractionDigits:0})}`, totalPnl >= 0 ? '#16a34a' : '#dc2626');
+    set('fwd-open', active.length + (unrealized !== 0 ? ` (${unrealized>=0?'+':''}$${Math.abs(unrealized).toFixed(0)} unrlzd)` : ''));
+    set('fwd-wr',   wr !== null ? `${wr.toFixed(1)}%` : '—', wr !== null ? (wr >= 43 ? '#16a34a' : '#dc2626') : null);
+    set('fwd-avg-win',  avgWin  !== null ? `+${avgWin.toFixed(1)}%`  : '—', avgWin  !== null ? (avgWin  >= 4.9 ? '#16a34a' : '#d97706') : '#16a34a');
+    set('fwd-avg-loss', avgLoss !== null ? `${avgLoss.toFixed(1)}%` : '—', '#dc2626');
+    set('fwd-pf',       pf !== null ? pf.toFixed(2) : '—', pf !== null ? (pf >= 1.32 ? '#16a34a' : '#dc2626') : null);
+
+    // vs Backtest comparison (only show once we have enough closed trades)
+    if (closed.length >= 5) {
+      const compGrid = document.getElementById('fwd-comp-grid');
+      const compEl   = document.getElementById('fwd-comparison');
+      if (compGrid && compEl) {
+        compEl.classList.remove('hidden');
+        const items = [
+          {label:'Win Rate', live: wr !== null ? `${wr.toFixed(1)}%` : '—', bt:'43.0%', beat: wr !== null && wr >= 43},
+          {label:'Avg Win',  live: avgWin !== null ? `+${avgWin.toFixed(1)}%` : '—', bt:'+4.9%', beat: avgWin !== null && avgWin >= 4.9},
+          {label:'Profit Factor', live: pf !== null ? pf.toFixed(2) : '—', bt:'1.32', beat: pf !== null && pf >= 1.32},
+        ];
+        compGrid.innerHTML = items.map(it => `
+          <div style="background:${it.beat?'#f0fdf4':'#fff7f7'};border-radius:8px;padding:10px 14px;border:1px solid ${it.beat?'#bbf7d0':'#fecaca'}">
+            <p style="font-size:11px;color:#6b7280;margin-bottom:4px">${it.label}</p>
+            <div style="display:flex;align-items:baseline;gap:8px">
+              <span style="font-size:18px;font-weight:700;color:${it.beat?'#16a34a':'#dc2626'}">${it.live}</span>
+              <span style="font-size:11px;color:#9ca3af">BT: ${it.bt}</span>
+              <span style="font-size:11px;font-weight:600;color:${it.beat?'#16a34a':'#dc2626'}">${it.beat?'✓ beating':'✗ below'}</span>
+            </div>
+          </div>`).join('');
+      }
+    }
+
+    // Closed trades mini-log
+    const closedBody = document.getElementById('fwd-closed-body');
+    const closedCount = document.getElementById('fwd-closed-count');
+    if (closedCount) closedCount.textContent = `${closed.length} trade${closed.length!==1?'s':''}`;
+    if (closedBody) {
+      if (closed.length === 0) {
+        closedBody.innerHTML = '<tr><td colspan="6" class="text-center py-4 text-gray-400 text-xs">No closed forward trades yet</td></tr>';
+      } else {
+        closedBody.innerHTML = closed.slice(0, 20).map(p => {
+          const pct = p.pnl_pct || 0;
+          const win = pct > 0;
+          return `<tr>
+            <td style="padding:8px 16px;font-weight:600;font-size:13px">${p.symbol}</td>
+            <td style="padding:8px 16px;text-align:right;font-size:12px">$${(p.entry_price||0).toFixed(2)}</td>
+            <td style="padding:8px 16px;text-align:right;font-size:12px">$${(p.exit_price||0).toFixed(2)}</td>
+            <td style="padding:8px 16px;text-align:right;font-size:12px;font-weight:600;color:${win?'#16a34a':'#dc2626'}">${pct>=0?'+':''}${pct.toFixed(2)}%</td>
+            <td style="padding:8px 16px;text-align:right"><span style="font-size:11px;padding:2px 7px;border-radius:4px;background:${win?'#dcfce7':'#fee2e2'};color:${win?'#16a34a':'#dc2626'}">${win?'WIN':'LOSS'}</span></td>
+            <td style="padding:8px 16px;font-size:12px;color:#6b7280">${(p.exit_date||'').slice(0,10)}</td>
+          </tr>`;
+        }).join('');
+      }
+    }
+  } catch(e) {
+    console.warn('Forward test load failed:', e);
+  }
+}
+
+// ── 5-Year Backtest ────────────────────────────────────────────────────
 let _s5yChart = null, _s5yPoller = null;
 
 async function run5YBacktest() {
@@ -2532,7 +3056,7 @@ function render5YResult(r) {
   const metrics = [
     {label:'Strategy Return', val:`${r.total_return_pct>=0?'+':''}${r.total_return_pct.toFixed(1)}%`, sub:`$${r.final_equity.toLocaleString('en-US',{maximumFractionDigits:0})}`, color:stratColor},
     {label:'SPY Return (B&H)', val:`${r.spy_ret_pct>=0?'+':''}${r.spy_ret_pct.toFixed(1)}%`, sub:`$${r.spy_final.toLocaleString('en-US',{maximumFractionDigits:0})}`, color:spyColor},
-    {label:'Win Rate', val:`${r.win_rate.toFixed(1)}%`, sub:`${r.n_trades} trades · ${r.symbols_tested} symbols`},
+    {label:'Win Rate', val:`${r.win_rate.toFixed(1)}%`, sub:`${r.n_trades} trades · ${r.symbols_tested} symbols`, color:'#111827'},
     {label:'Max Drawdown', val:`-${r.max_drawdown_pct.toFixed(1)}%`, sub:`Sharpe ${r.sharpe.toFixed(2)}`, color:'#dc2626'},
     {label:'Avg Win', val:`+${r.avg_win_pct.toFixed(2)}%`, sub:'per trade', color:'#16a34a'},
     {label:'Avg Loss', val:`${r.avg_loss_pct.toFixed(2)}%`, sub:'per trade', color:'#dc2626'},
@@ -2571,7 +3095,7 @@ function render5YResult(r) {
   const fmt$ = (n) => '$'+Math.round(n).toLocaleString('en-US');
   document.getElementById('s5y-mc').innerHTML = `
     <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin-bottom:10px">
-      <p style="font-size:11px;font-weight:600;color:#374151;margin-bottom:8px">Final equity distribution (10,000 simulations, starting $100k)</p>
+      <p style="font-size:11px;font-weight:600;color:#374151;margin-bottom:8px">Final equity distribution (10,000 simulations, starting $10k)</p>
       ${[
         {pct:'5th percentile (bad luck)', val:r.mc_p5, color:'#dc2626'},
         {pct:'25th percentile', val:r.mc_p25, color:'#f59e0b'},
@@ -2589,7 +3113,7 @@ function render5YResult(r) {
         <p style="font-size:22px;font-weight:800;color:#16a34a">${r.mc_prob_profit}%</p>
       </div>
       <div style="flex:1;background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:10px;text-align:center">
-        <p style="font-size:11px;color:#2563eb">Probability of 2× ($200k)</p>
+        <p style="font-size:11px;color:#2563eb">Probability of 2× ($20k)</p>
         <p style="font-size:22px;font-weight:800;color:#2563eb">${r.mc_prob_2x}%</p>
       </div>
     </div>`;
@@ -2598,9 +3122,10 @@ function render5YResult(r) {
   const ctx = document.getElementById('s5y-chart').getContext('2d');
   if (_s5yChart) _s5yChart.destroy();
   const labels = r.trade_dates.length ? r.trade_dates : r.equity_curve.map((_,i)=>i);
+  const _startEq = r.starting_equity || 10000;
   const spyPoints = r.equity_curve.map((_,i) => {
     const progress = i / Math.max(r.equity_curve.length - 1, 1);
-    return Math.round(100_000 * (1 + progress * r.spy_ret_pct / 100));
+    return Math.round(_startEq * (1 + progress * r.spy_ret_pct / 100));
   });
   _s5yChart = new Chart(ctx, {
     type: 'line',

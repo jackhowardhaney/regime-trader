@@ -245,6 +245,91 @@ def _background_daily_scan():
         time.sleep(3600)  # check every hour; scan gate prevents re-runs same day
 
 
+def _find_alpaca_exit_price(client, symbol: str, entry_date: str) -> Optional[float]:
+    """Look up the most recent filled SELL order for symbol since entry_date."""
+    try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus, OrderSide
+        from datetime import timezone
+
+        after_dt = None
+        if entry_date:
+            try:
+                after_dt = datetime.fromisoformat(entry_date.replace("Z", "+00:00"))
+                if after_dt.tzinfo is None:
+                    after_dt = after_dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                pass
+
+        params: dict = {"status": QueryOrderStatus.CLOSED, "symbols": [symbol], "limit": 10}
+        if after_dt:
+            params["after"] = after_dt
+
+        orders = client._trading.get_orders(filter=GetOrdersRequest(**params))
+        for order in orders:
+            side = str(getattr(order, "side", "")).lower()
+            status = str(getattr(order, "status", "")).lower()
+            if side == "sell" and status == "filled":
+                price = getattr(order, "filled_avg_price", None)
+                if price:
+                    return float(price)
+    except Exception:
+        pass
+    return None
+
+
+def _sync_alpaca_plays():
+    """Background thread: sync Alpaca positions/orders → DB every 10 minutes.
+
+    PENDING → ACTIVE  when Alpaca confirms the entry fill
+    ACTIVE  → CLOSED  when Alpaca no longer holds the position (stop/target hit)
+    """
+    time.sleep(30)  # let webapp fully start before first sync
+    while True:
+        try:
+            client = get_alpaca_client()
+            if client:
+                alpaca_positions = {p["symbol"]: p for p in client.get_positions()}
+                with get_db() as conn:
+                    open_plays = conn.execute(
+                        "SELECT * FROM plays WHERE status IN ('PENDING','ACTIVE')"
+                    ).fetchall()
+                    for play in open_plays:
+                        sym = play["symbol"]
+                        if sym in alpaca_positions:
+                            if play["status"] == "PENDING":
+                                avg_entry = float(
+                                    alpaca_positions[sym].get("avg_entry_price", 0)
+                                    or play["entry_price"] or 0
+                                )
+                                conn.execute(
+                                    "UPDATE plays SET status='ACTIVE', entry_price=? WHERE id=?",
+                                    (avg_entry or play["entry_price"], play["id"]),
+                                )
+                        else:
+                            # Position gone — find exit price from closed orders
+                            exit_price = _find_alpaca_exit_price(
+                                client, sym, play["entry_date"] or ""
+                            )
+                            entry_p = float(play["entry_price"] or 0)
+                            shares  = float(play["shares"] or 0)
+                            if exit_price and entry_p and shares:
+                                pnl     = round((exit_price - entry_p) * shares, 2)
+                                pnl_pct = round((exit_price - entry_p) / entry_p * 100, 2)
+                            else:
+                                pnl = pnl_pct = None
+                            conn.execute(
+                                """UPDATE plays SET status='CLOSED', exit_price=?,
+                                   exit_date=?, pnl=?, pnl_pct=? WHERE id=?""",
+                                (exit_price,
+                                 datetime.utcnow().isoformat()[:10],
+                                 pnl, pnl_pct, play["id"]),
+                            )
+        except Exception:
+            pass
+        time.sleep(600)  # run every 10 minutes
+
+
 # ── Pydantic models ────────────────────────────────────────────────
 class WatchlistAdd(BaseModel):
     symbol: str
@@ -641,7 +726,7 @@ def _run_backtest(symbols: List[str], start: str, end: str):
             period_df = primary_df.tail(req_days)
 
         alloc_per_trade = 0.10  # 10% of portfolio per signal
-        equity          = 100_000.0
+        equity          = 10_000.0
         trade_by_date: Dict[pd.Timestamp, List[float]] = {}
         for t in all_trades:
             trade_by_date.setdefault(t["date"], []).append(t["ret"])
@@ -658,7 +743,7 @@ def _run_backtest(symbols: List[str], start: str, end: str):
 
         if len(curve_values) < 2:
             curve_dates  = [start, end]
-            curve_values = [100_000.0, 100_000.0]
+            curve_values = [10_000.0, 10_000.0]
 
         # ── 4. Stats ─────────────────────────────────────────────────────
         s_eq, e_eq = curve_values[0], curve_values[-1]
@@ -984,6 +1069,25 @@ def symbol_news(symbol: str):
 
 
 # ── Plays routes ───────────────────────────────────────────────────
+@app.get("/api/plays/equity-curve")
+def plays_equity_curve():
+    """Cumulative P&L curve from closed trades for the Plays tab chart."""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT pnl, exit_date FROM plays WHERE status='CLOSED' AND pnl IS NOT NULL ORDER BY exit_date"
+        ).fetchall()
+    if not rows:
+        return {"dates": [], "values": [], "starting": 10000.0}
+    starting = 10000.0
+    equity = starting
+    dates, values = [], []
+    for r in rows:
+        equity += (r["pnl"] or 0)
+        dates.append((r["exit_date"] or "")[:10])
+        values.append(round(equity, 2))
+    return {"dates": dates, "values": values, "starting": starting}
+
+
 @app.get("/api/plays")
 def list_plays(status: Optional[str] = None):
     with get_db() as conn:
@@ -1434,19 +1538,17 @@ def refresh_play_backtests():
 # ── 5-Year Strategy Backtest ───────────────────────────────────────
 _S5Y_STATE: Dict = {"running": False, "progress": 0, "result": None, "error": None}
 
-# Representative liquid symbols across sectors — broad enough to be statistically valid
+# Exact same universe the live bot scans — keeps backtest consistent with live behavior
 _S5Y_SYMBOLS = [
-    "AAPL","MSFT","NVDA","GOOGL","AMZN","META","TSLA",
-    "JPM","GS","BAC","V","MA",
-    "LLY","JNJ","ABBV","UNH",
-    "XOM","CVX","COP",
-    "NEE","FSLR",
-    "LMT","RTX",
-    "CAT","HON","DE","GE",
-    "EQIX","DLR",
-    "CRM","NOW","CRWD",
-    "COIN","MSTR",
-    "NUE","URI","SLB","TXN",
+    "AAPL","MSFT","GOOGL","AMZN","META","NVDA","TSLA","AMD",
+    "JPM","GS","BAC","MS","V","MA",
+    "XOM","CVX","SLB","COP",
+    "EQIX","AMT","PLD",
+    "NUE","CAT","URI","HON",
+    "TXN","AVGO","QCOM",
+    "UNH","LLY","JNJ","ABBV",
+    "COIN","IPGP","PLTR","MSTR",
+    "SPY","QQQ","IWM",
 ]
 
 def _run_5y_backtest():
@@ -1459,12 +1561,14 @@ def _run_5y_backtest():
         return
 
     _S5Y_STATE.update({"running": True, "progress": 0, "result": None, "error": None})
-    DAYS = 1825          # ~5 years
-    SCORE_THRESHOLD = 65
-    TARGET_PCT = 0.05
-    STOP_PCT   = 0.03
-    HOLD_DAYS  = 10
-    POSITION_PCT = 0.10  # 10% of equity per trade
+    DAYS = 1825
+    SCORE_THRESHOLD  = 65
+    ATR_STOP_MULT    = 1.5    # current bot: stop = entry - ATR×1.5
+    ATR_TARGET_MULT  = 3.75   # current bot: target = ATR×3.75 (floored at +7%)
+    SCALE_TRIGGER    = 1.07   # sell 90% when gain hits +7%
+    SCALE_PCT        = 0.90
+    HOLD_DAYS        = 10
+    POSITION_PCT     = 0.10
 
     all_trades: list = []  # list of (date_idx, ret_pct)
     date_index = None      # will use SPY dates as the master calendar
@@ -1487,6 +1591,8 @@ def _run_5y_backtest():
             low_  = df["low"].astype(float)
             close_ = df["close"].astype(float)
             n = len(df)
+            high_arr = high_.values
+            low_arr  = low_.values
             window_start = max(55, n - DAYS)
             for i in range(window_start, n - HOLD_DAYS - 1):
                 scored = _score_sym(df.iloc[:i + 1], sym)
@@ -1495,15 +1601,41 @@ def _run_5y_backtest():
                 entry = float(open_.iloc[i + 1])
                 if entry <= 0:
                     continue
-                target = entry * (1 + TARGET_PCT)
-                stop   = entry * (1 - STOP_PCT)
-                exit_px = float(close_.iloc[min(i + HOLD_DAYS, n - 1)])
+                # ATR-based stop + target (current bot params)
+                atr14 = float(np.mean(high_arr[max(0, i-14):i+1] - low_arr[max(0, i-14):i+1]))
+                if atr14 <= 0:
+                    continue
+                init_stop     = max(entry - atr14 * ATR_STOP_MULT, entry * 0.95)
+                scaleout_px   = entry * SCALE_TRIGGER  # +7% trigger
+                hold_end      = float(close_.iloc[min(i + HOLD_DAYS, n - 1)])
+                partial_triggered = False
+                trail_stop    = init_stop
+                trail_high    = entry
+                full_exit     = hold_end
+                runner_exit   = hold_end
                 for j in range(i + 1, min(i + HOLD_DAYS + 1, n)):
-                    if float(high_.iloc[j]) >= target:
-                        exit_px = target; break
-                    if float(low_.iloc[j]) <= stop:
-                        exit_px = stop; break
-                ret = (exit_px / entry - 1) * 100
+                    h = float(high_arr[j]) if j < n else 0.0
+                    l = float(low_arr[j])  if j < n else 1e9
+                    if not partial_triggered:
+                        if h >= scaleout_px:
+                            partial_triggered = True
+                            trail_high = scaleout_px
+                            trail_stop = max(trail_high - atr14 * ATR_STOP_MULT, entry)
+                            if l <= trail_stop:
+                                runner_exit = trail_stop; break
+                        elif l <= init_stop:
+                            full_exit = init_stop; break
+                    else:
+                        if h > trail_high:
+                            trail_high = h
+                            trail_stop = max(trail_stop, trail_high - atr14 * ATR_STOP_MULT)
+                        if l <= trail_stop:
+                            runner_exit = trail_stop; break
+                if partial_triggered:
+                    ret = (SCALE_PCT * (scaleout_px / entry - 1)
+                           + (1 - SCALE_PCT) * (runner_exit / entry - 1)) * 100
+                else:
+                    ret = (full_exit / entry - 1) * 100
                 # Map bar index to calendar date
                 try:
                     bar_date = df.index[i + 1]
@@ -1522,7 +1654,8 @@ def _run_5y_backtest():
     # ── Equity curve ──────────────────────────────────────────────────
     # Sort trades by date, simulate equity with 10% position sizing
     sorted_trades = sorted(all_trades, key=lambda x: x["date"])
-    equity = 100_000.0
+    STARTING_EQUITY = 10_000.0
+    equity = STARTING_EQUITY
     equity_curve = [equity]
     daily_rets: list = []
     for t in sorted_trades:
@@ -1535,12 +1668,12 @@ def _run_5y_backtest():
     # ── SPY buy-and-hold curve ────────────────────────────────────────
     spy_close = spy_df["close"].astype(float)
     spy_ret_total = float((spy_close.iloc[-1] - spy_close.iloc[0]) / spy_close.iloc[0] * 100)
-    spy_final = round(100_000 * (1 + spy_ret_total / 100), 2)
+    spy_final = round(STARTING_EQUITY * (1 + spy_ret_total / 100), 2)
     spy_daily = spy_close.pct_change().dropna().values.tolist()
 
     # ── Key stats ─────────────────────────────────────────────────────
     rets_arr = np.array(daily_rets)
-    total_return = (equity_curve[-1] - 100_000) / 100_000 * 100
+    total_return = (equity_curve[-1] - STARTING_EQUITY) / STARTING_EQUITY * 100
     n_trades = len(sorted_trades)
     wins = [r for r in daily_rets if r > 0]
     losses = [r for r in daily_rets if r <= 0]
@@ -1549,7 +1682,7 @@ def _run_5y_backtest():
     avg_loss = float(np.mean(losses)) * 100 if losses else 0
     profit_factor = (sum(wins) / abs(sum(losses))) if losses else 99.0
     # Max drawdown
-    peak, max_dd = 100_000.0, 0.0
+    peak, max_dd = STARTING_EQUITY, 0.0
     for eq in equity_curve:
         peak = max(peak, eq)
         dd = (peak - eq) / peak * 100
@@ -1595,7 +1728,7 @@ def _run_5y_backtest():
         sim_finals = []
         for _ in range(N_SIM):
             sampled = np.random.choice(rets_arr, size=n_trades, replace=True)
-            eq = 100_000.0
+            eq = STARTING_EQUITY
             for r in sampled:
                 eq += eq * POSITION_PCT * r
             sim_finals.append(eq)
@@ -1605,10 +1738,10 @@ def _run_5y_backtest():
         mc_p50 = round(float(np.percentile(sim_arr, 50)), 2)
         mc_p75 = round(float(np.percentile(sim_arr, 75)), 2)
         mc_p95 = round(float(np.percentile(sim_arr, 95)), 2)
-        mc_prob_profit = round(float(np.mean(sim_arr > 100_000) * 100), 1)
-        mc_prob_2x     = round(float(np.mean(sim_arr > 200_000) * 100), 1)
+        mc_prob_profit = round(float(np.mean(sim_arr > STARTING_EQUITY) * 100), 1)
+        mc_prob_2x     = round(float(np.mean(sim_arr > STARTING_EQUITY * 2) * 100), 1)
     except Exception:
-        mc_p5 = mc_p25 = mc_p50 = mc_p75 = mc_p95 = 100_000.0
+        mc_p5 = mc_p25 = mc_p50 = mc_p75 = mc_p95 = STARTING_EQUITY
         mc_prob_profit = mc_prob_2x = 0.0
 
     # ── Optimisation suggestions ───────────────────────────────────────
@@ -1633,7 +1766,9 @@ def _run_5y_backtest():
     _S5Y_STATE["progress"] = 100
     _S5Y_STATE["result"] = {
         "computed_at": datetime.utcnow().isoformat(),
+        "config_desc": "ATR×1.5 stop · ATR×3.75 target (floor +7%) · scale-out 90% at +7% · score ≥65",
         "symbols_tested": len(_S5Y_SYMBOLS),
+        "starting_equity": STARTING_EQUITY,
         "n_trades": n_trades,
         "total_return_pct": round(total_return, 2),
         "final_equity": round(equity_curve[-1], 2),
@@ -1678,6 +1813,47 @@ def get_5y_status():
         "progress": _S5Y_STATE["progress"],
         "result":   _S5Y_STATE["result"],
         "error":    _S5Y_STATE["error"],
+    }
+
+
+@app.get("/api/strategy/research")
+def get_strategy_research():
+    """Return optimizer results + scale-out comparison + current config summary."""
+    opt_path = ROOT / "bt_optimize_results.json"
+    optimizer_results, spy_5yr_pct = [], None
+    if opt_path.exists():
+        try:
+            data = json.loads(opt_path.read_text())
+            optimizer_results = data.get("results", [])
+            spy_5yr_pct = data.get("spy_5yr_pct")
+        except Exception:
+            pass
+
+    # Scale-out test results (from offline optimize_scaleout.py run — 5yr, 38 symbols)
+    scaleout_results = [
+        {"name": "Hard +7% (baseline)", "partial_pct": 100, "sharpe": 2.01, "max_dd": 12.6,
+         "total_ret": 680.6, "win_rate": 43.0, "pct_ran_past_7": 0.0, "avg_runner_ret": 0.0, "current": False},
+        {"name": "Scale 50% at +7%",    "partial_pct":  50, "sharpe": 1.11, "max_dd": 12.1,
+         "total_ret": 398.2, "win_rate": 43.0, "pct_ran_past_7": 23.4, "avg_runner_ret": 10.2, "current": False},
+        {"name": "Scale 75% at +7%",    "partial_pct":  75, "sharpe": 1.56, "max_dd": 12.3,
+         "total_ret": 545.8, "win_rate": 43.0, "pct_ran_past_7": 23.4, "avg_runner_ret":  9.8, "current": False},
+        {"name": "Scale 90% at +7%",    "partial_pct":  90, "sharpe": 1.93, "max_dd": 12.4,
+         "total_ret": 648.3, "win_rate": 43.0, "pct_ran_past_7": 23.4, "avg_runner_ret":  9.6, "current": True},
+    ]
+
+    return {
+        "optimizer_results": optimizer_results,
+        "spy_5yr_pct": spy_5yr_pct,
+        "scaleout_results": scaleout_results,
+        "current_config": {
+            "score_threshold": 65,
+            "atr_stop_mult":   1.5,
+            "atr_target_mult": 3.75,
+            "target_floor_pct": 7.0,
+            "scale_out_pct":   90,
+            "hold_days":       10,
+            "risk_per_trade_pct": 2.0,
+        },
     }
 
 
@@ -1873,8 +2049,8 @@ def index():
 @app.on_event("startup")
 def startup():
     init_db()
-    t = threading.Thread(target=_background_daily_scan, daemon=True)
-    t.start()
+    threading.Thread(target=_background_daily_scan, daemon=True).start()
+    threading.Thread(target=_sync_alpaca_plays, daemon=True).start()
 
 
 if __name__ == "__main__":

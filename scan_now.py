@@ -1,10 +1,14 @@
 """
 One-shot: scan universe, score every symbol not already held, submit bracket
 orders for top picks using remaining buying power.
+
+Designed to run as a Railway Cron job at 9:35am ET Mon-Fri.
+Set WEBAPP_URL env var to your Railway webapp URL so plays appear on the dashboard.
 """
-import os, sys, logging
+import os, sys, logging, json
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib import request as _urllib_request
 
 import pandas as pd
 from dotenv import load_dotenv
@@ -21,24 +25,28 @@ from core.regime_strategies import Signal
 from data.market_data import MarketDataFetcher
 
 # ── Parameters ────────────────────────────────────────────────────────
-MIN_SCORE      = 55        # lower threshold for forced scan
-RISK_PCT       = 0.02      # 2% equity per trade
+MIN_SCORE      = 65
+RISK_PCT       = 0.05      # 5% equity per trade
 ATR_STOP_MULT  = 1.5
 ATR_TARGET_MULT = 3.75
 ATR_PERIOD     = 14
 MAX_POSITIONS  = 15
+WEBAPP_URL     = os.getenv("WEBAPP_URL", "").rstrip("/")
 
-SCAN_UNIVERSE = [
-    "AAPL","MSFT","GOOGL","AMZN","META","NVDA","TSLA","AMD",
-    "JPM","GS","BAC","MS","V","MA",
-    "CVX","COP","AMT","PLD",
-    "AVGO","QCOM",
-    "UNH","LLY","JNJ","ABBV",
-    "PLTR","MSTR","RBLX","SNAP","UBER",
-    "F","GM","RIVN",
-    "DIS","NFLX","SPOT",
-    "SPY","QQQ","IWM",
-]
+try:
+    from data.sector_symbols import ALL_HANDPICK_SYMBOLS as SCAN_UNIVERSE
+except Exception:
+    SCAN_UNIVERSE = [
+        "AAPL","MSFT","GOOGL","AMZN","META","NVDA","TSLA","AMD",
+        "JPM","GS","BAC","MS","V","MA",
+        "CVX","COP","AMT","PLD",
+        "AVGO","QCOM",
+        "UNH","LLY","JNJ","ABBV",
+        "PLTR","MSTR","RBLX","SNAP","UBER",
+        "F","GM","RIVN",
+        "DIS","NFLX","SPOT",
+        "SPY","QQQ","IWM",
+    ]
 
 def atr(bars, period=ATR_PERIOD):
     tr = pd.concat([
@@ -49,6 +57,34 @@ def atr(bars, period=ATR_PERIOD):
     return float(tr.ewm(span=period, adjust=False).mean().iloc[-1])
 
 
+def _record_play(symbol, direction, entry_price, stop_loss, take_profit, shares, signal, notes):
+    """POST new play to the dashboard webapp API."""
+    if not WEBAPP_URL:
+        return
+    payload = json.dumps({
+        "symbol": symbol,
+        "direction": direction,
+        "entry_price": entry_price,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "shares": shares,
+        "signal": signal,
+        "notes": notes,
+        "submit_order": False,
+    }).encode()
+    try:
+        req = _urllib_request.Request(
+            f"{WEBAPP_URL}/api/plays",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with _urllib_request.urlopen(req, timeout=10) as resp:
+            pass
+    except Exception as e:
+        print(f"    Warning: dashboard record failed: {e}")
+
+
 def main():
     client = AlpacaClient(
         api_key=os.getenv("ALPACA_API_KEY"),
@@ -57,12 +93,22 @@ def main():
     )
     client.connect()
 
+    # ── Market hours check — exit cleanly if market is closed ──
+    clock = client.get_clock()
+    if not clock.get("is_open", False):
+        next_open = clock.get("next_open", "unknown")
+        print(f"Market is closed. Next open: {next_open}")
+        print("Nothing to do — exiting.")
+        return
+
     acct = client.get_account()
     equity        = float(acct["equity"])
     buying_power  = float(acct["buying_power"])
     print(f"\n{'='*55}")
+    print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S ET')}")
     print(f"  Account equity:    ${equity:>12,.2f}")
     print(f"  Buying power:      ${buying_power:>12,.2f}")
+    print(f"  Dashboard:         {WEBAPP_URL or '(not set)'}")
 
     held = {p["symbol"] for p in client.get_positions()}
     slots = MAX_POSITIONS - len(held)
@@ -91,7 +137,7 @@ def main():
             if result:
                 result["_bars"] = df
                 scored.append(result)
-        except Exception as e:
+        except Exception:
             pass
 
     scored.sort(key=lambda x: x.get("score", 0), reverse=True)
@@ -116,7 +162,7 @@ def main():
             continue
 
         stop   = round(price - a * ATR_STOP_MULT, 2)
-        target = round(price + a * ATR_TARGET_MULT, 2)
+        target = max(round(price + a * ATR_TARGET_MULT, 2), round(price * 1.07, 2))
         risk_ps = price - stop
         if risk_ps <= 0:
             continue
@@ -134,7 +180,6 @@ def main():
         score   = candidate.get("score", 0)
 
         try:
-            from datetime import datetime as _dt
             signal = Signal(
                 symbol=sym,
                 direction="LONG",
@@ -147,7 +192,7 @@ def main():
                 regime_id=0,
                 regime_name="SWING",
                 regime_probability=1.0,
-                timestamp=_dt.utcnow(),
+                timestamp=datetime.utcnow(),
                 reasoning=f"swing scan score={score} signals={signals}",
                 strategy_name=signals[0] if signals else "composite",
             )
@@ -157,7 +202,17 @@ def main():
             print(f"  ✓ ENTERED {sym}")
             print(f"    score={score}  signals={signals}")
             print(f"    {shares} sh @ ${price:.2f}  stop=${stop:.2f}  target=${target:.2f}")
-            print(f"    cost=${cost:,.2f}  BP left=${buying_power:,.2f}\n")
+            print(f"    cost=${cost:,.2f}  BP left=${buying_power:,.2f}")
+
+            # Record play in dashboard DB
+            notes = f"score={score} cron=scan_now signals={','.join(signals)}"
+            _record_play(
+                symbol=sym, direction="LONG",
+                entry_price=price, stop_loss=stop, take_profit=target,
+                shares=shares, signal=signals[0] if signals else "composite",
+                notes=notes,
+            )
+            print(f"    Dashboard: recorded ✓\n")
         except Exception as e:
             print(f"  ✗ {sym} failed: {e}\n")
 
