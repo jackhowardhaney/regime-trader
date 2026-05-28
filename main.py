@@ -20,6 +20,7 @@ CLI:
 import argparse
 import json
 import logging
+import os
 import queue
 import signal as signal_module
 import sys
@@ -28,6 +29,7 @@ import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib import request as _urllib_request
 
 import numpy as np
 import pandas as pd
@@ -46,15 +48,132 @@ MIN_SCORE = 65          # minimum opportunity score to enter a play
 MIN_SCORE_FORCED = 52   # lower threshold when daily minimum not yet hit
 MAX_POSITIONS = 15      # hard cap on concurrent open plays
 RISK_PER_TRADE = 0.05   # 5% of equity risked per trade ($500 risk on $10k)
-ATR_STOP_MULT = 1.5     # stop = entry - ATR * multiplier
-ATR_TARGET_MULT = 3.75  # target = entry + ATR * multiplier (2.5:1 R:R)
+ATR_STOP_MULT = 1.5     # stop = entry - ATR * multiplier (scanner logic)
+ATR_TARGET_MULT = 3.75  # target = entry + ATR * multiplier (scanner, 2.5:1 R:R)
 ATR_PERIOD = 14
+
+# Watchlist entry logic — tighter stops, slightly higher risk (conviction premium)
+WATCHLIST_MIN_BLEND  = 70
+WATCHLIST_ATR_STOP   = 1.2   # tighter stop — conviction earns precision
+WATCHLIST_ATR_TARGET = 3.0   # adjusted to maintain 2.5:1 R:R with tighter stop
+WATCHLIST_RISK_PCT   = 0.055
+
+# Adaptive ratio — shifts toward better-performing source over time
+MIN_TRADES_TO_ADJUST = 4
+RATIO_STEP  = 0.05
+RATIO_MIN   = 0.25
+RATIO_MAX   = 0.75
+
+WEBAPP_URL = os.getenv("WEBAPP_URL", "").rstrip("/")
 
 # Daily trading discipline — always active
 MIN_DAILY_ENTRIES = 2       # enter at least this many plays per trading day
 MIN_DEPLOYED_PCT  = 0.25    # keep at least 25% of equity in open positions at all times
-# When market is open and deployed < MIN_DEPLOYED_PCT, bot re-scans immediately
-# When daily entries < MIN_DAILY_ENTRIES by midday, threshold drops to MIN_SCORE_FORCED
+
+
+# ── Webapp API helpers (blend ratio + play recording) ──────────────────────────
+
+def _api_get(path: str) -> dict:
+    if not WEBAPP_URL:
+        return {}
+    req = _urllib_request.Request(f"{WEBAPP_URL}{path}", method="GET")
+    with _urllib_request.urlopen(req, timeout=12) as r:
+        return json.loads(r.read())
+
+
+def _api_put(path: str, body: dict) -> dict:
+    if not WEBAPP_URL:
+        return {}
+    payload = json.dumps(body).encode()
+    req = _urllib_request.Request(
+        f"{WEBAPP_URL}{path}", data=payload,
+        headers={"Content-Type": "application/json"}, method="PUT",
+    )
+    with _urllib_request.urlopen(req, timeout=12) as r:
+        return json.loads(r.read())
+
+
+def _api_post(path: str, body: dict) -> dict:
+    if not WEBAPP_URL:
+        return {}
+    payload = json.dumps(body).encode()
+    req = _urllib_request.Request(
+        f"{WEBAPP_URL}{path}", data=payload,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    with _urllib_request.urlopen(req, timeout=12) as r:
+        return json.loads(r.read())
+
+
+def _fetch_blend_ratio() -> tuple:
+    try:
+        d = _api_get("/api/blend-ratio")
+        return float(d.get("scanner_pct", 0.60)), float(d.get("watchlist_pct", 0.40))
+    except Exception:
+        return 0.60, 0.40
+
+
+def _compute_quality(perf: dict) -> float:
+    wr  = perf.get("win_rate", 0) / 100.0
+    avg = perf.get("avg_pnl", 0)
+    return wr * avg if avg > 0 else 0.0
+
+
+def _update_blend_ratio(scanner_pct: float, watchlist_pct: float) -> None:
+    try:
+        data = _api_get("/api/blend-analysis")
+        perf = data.get("source_performance", {})
+        sn   = perf.get("scanner", {}).get("count", 0)
+        wn   = perf.get("watchlist", {}).get("count", 0)
+        if sn < MIN_TRADES_TO_ADJUST or wn < MIN_TRADES_TO_ADJUST:
+            reason = (f"Not enough data (scanner={sn}, watchlist={wn}). "
+                      f"Need {MIN_TRADES_TO_ADJUST} each. Keeping {scanner_pct:.0%}/{watchlist_pct:.0%}.")
+            _api_put("/api/blend-ratio", {"scanner_pct": scanner_pct, "reason": reason})
+            logger.info("Blend ratio unchanged: %s", reason)
+            return
+        sq = _compute_quality(perf.get("scanner", {}))
+        wq = _compute_quality(perf.get("watchlist", {}))
+        new_sp = scanner_pct
+        if sq <= 0 and wq <= 0:
+            new_sp = 0.50
+            reason = f"Both sources losing (sq={sq:.1f}, wq={wq:.1f}). Reset 50/50."
+        elif sq > 0 and wq <= 0:
+            new_sp = min(RATIO_MAX, scanner_pct + RATIO_STEP)
+            reason = f"Scanner winning (q={sq:.2f}) / watchlist losing. +{RATIO_STEP:.0%} to scanner."
+        elif wq > 0 and sq <= 0:
+            new_sp = max(RATIO_MIN, scanner_pct - RATIO_STEP)
+            reason = f"Watchlist winning (q={wq:.2f}) / scanner losing. +{RATIO_STEP:.0%} to watchlist."
+        else:
+            total_q = sq + wq
+            ideal   = sq / total_q if total_q else 0.5
+            gap     = abs(sq - wq) / max(sq, wq)
+            if gap > 0.20:
+                new_sp = max(RATIO_MIN, min(RATIO_MAX,
+                    scanner_pct + RATIO_STEP * (1 if ideal > scanner_pct else -1)
+                ))
+                winner = "scanner" if sq > wq else "watchlist"
+                reason = f"{winner.title()} leading by {gap:.0%}. Adjusting → scanner {new_sp:.0%}."
+            else:
+                reason = f"Both positive, gap {gap:.0%} <20%. Holding {scanner_pct:.0%}/{watchlist_pct:.0%}."
+        _api_put("/api/blend-ratio", {"scanner_pct": new_sp, "reason": reason})
+        logger.info("Blend ratio → scanner=%.0f%% watchlist=%.0f%% | %s",
+                    new_sp * 100, (1 - new_sp) * 100, reason)
+    except Exception as exc:
+        logger.warning("Blend ratio update failed: %s", exc)
+
+
+def _record_to_dashboard(symbol, direction, entry, stop, target, shares, signal, notes, source):
+    try:
+        _api_post("/api/plays", {
+            "symbol": symbol, "direction": direction,
+            "entry_price": entry, "stop_loss": stop, "take_profit": target,
+            "shares": shares, "signal": signal, "notes": notes,
+            "submit_order": False, "source": source,
+        })
+    except Exception as exc:
+        logger.debug("Dashboard record failed for %s: %s", symbol, exc)
+
+
 try:
     from data.sector_symbols import ALL_HANDPICK_SYMBOLS as SCAN_SYMBOLS_DEFAULT
 except Exception:
@@ -492,8 +611,8 @@ class SwingTrader:
 
     def _scan_and_enter(self) -> None:
         """
-        Score the full universe, rank by composite score, and submit bracket
-        orders for every qualifying setup the bot doesn't already hold.
+        Score the full universe with adaptive two-logic blend (scanner + watchlist),
+        rank by composite score, and submit bracket orders for qualifying setups.
         """
         from core.opportunity_scanner import score_symbol
 
@@ -511,21 +630,33 @@ class SwingTrader:
         n_open = len(open_positions)
 
         if n_open >= MAX_POSITIONS:
-            logger.info("Max positions reached (%d/%d) — skipping scan.", n_open, MAX_POSITIONS)
+            logger.info("Max positions reached (%d/%d) — running ratio update only.", n_open, MAX_POSITIONS)
+            scanner_pct, watchlist_pct = _fetch_blend_ratio()
+            _update_blend_ratio(scanner_pct, watchlist_pct)
             return
 
-        # Decide score threshold — lower it if we haven't hit daily minimum by midday
-        now_et_hour = (datetime.utcnow().hour - 4) % 24  # rough ET hour
-        needs_entries = self._daily_entries < MIN_DAILY_ENTRIES
-        past_midday   = now_et_hour >= 12
-        threshold = MIN_SCORE_FORCED if (needs_entries and past_midday) else MIN_SCORE
-        if threshold < MIN_SCORE:
-            logger.info(
-                "Daily minimum not met (%d/%d entries) — lowering threshold to %d",
-                self._daily_entries, MIN_DAILY_ENTRIES, threshold,
-            )
+        # Adaptive ratio — split available slots between scanner and watchlist
+        scanner_pct, watchlist_pct = _fetch_blend_ratio()
+        slots_total = MAX_POSITIONS - n_open
+        scanner_slots   = max(1, round(slots_total * scanner_pct))
+        watchlist_slots = max(0, slots_total - scanner_slots)
+        if slots_total == 1:
+            scanner_slots   = 1 if scanner_pct >= watchlist_pct else 0
+            watchlist_slots = 1 - scanner_slots
 
-        # Score every symbol we have bars for
+        # Decide score threshold — lower it if we haven't hit daily minimum by midday
+        now_et_hour = (datetime.utcnow().hour - 4) % 24
+        threshold = (MIN_SCORE_FORCED
+                     if self._daily_entries < MIN_DAILY_ENTRIES and now_et_hour >= 12
+                     else MIN_SCORE)
+
+        logger.info(
+            "Scan: slots=%d (scanner=%d, watchlist=%d)  ratio=%.0f%%/%.0f%%  threshold=%d",
+            slots_total, scanner_slots, watchlist_slots,
+            scanner_pct * 100, watchlist_pct * 100, threshold,
+        )
+
+        # ── SCANNER LOGIC ─────────────────────────────────────────────────────
         scored: List[dict] = []
         for sym, bars in self._bar_history.items():
             if len(bars) < 50:
@@ -537,93 +668,123 @@ class SwingTrader:
             except Exception as exc:
                 logger.debug("score_symbol failed for %s: %s", sym, exc)
 
-        # Rank by composite score descending
         scored.sort(key=lambda x: x.get("score", 0), reverse=True)
-        self._scan_results = scored[:20]  # store top 20 for dashboard
+        self._scan_results = scored[:20]
 
-        candidates = [
+        scanner_candidates = [
             r for r in scored
             if r.get("score", 0) >= threshold
             and r.get("firing_signals")
             and r["symbol"] not in open_positions
         ]
 
-        slots_available = MAX_POSITIONS - n_open
+        scanner_entered = 0
+        for cand in scanner_candidates:
+            if scanner_entered >= scanner_slots:
+                break
+            if self._enter_play(cand, equity, source="scanner"):
+                scanner_entered += 1
+                open_positions.add(cand["symbol"])
+
+        # ── WATCHLIST LOGIC ───────────────────────────────────────────────────
+        watchlist_entered = 0
+        if watchlist_slots > 0:
+            try:
+                blend_data = _api_get("/api/blend-analysis")
+                wl_candidates = [
+                    c for c in blend_data.get("candidates", [])
+                    if c.get("blend_score", 0) >= WATCHLIST_MIN_BLEND
+                    and c.get("bsh") == "BUY"
+                    and c["symbol"] not in open_positions
+                ]
+                logger.info("Watchlist: %d candidates (blend ≥ %d)", len(wl_candidates), WATCHLIST_MIN_BLEND)
+                for cand in wl_candidates:
+                    if watchlist_entered >= watchlist_slots:
+                        break
+                    # Build a pseudo-candidate using scanner score so _enter_play can log it
+                    wl_entry = {
+                        "symbol": cand["symbol"],
+                        "score": int(cand.get("blend_score", 0)),
+                        "firing_signals": ["watchlist_blend"],
+                    }
+                    if self._enter_play(
+                        wl_entry, equity,
+                        atr_stop_mult=WATCHLIST_ATR_STOP,
+                        atr_target_mult=WATCHLIST_ATR_TARGET,
+                        risk_pct=WATCHLIST_RISK_PCT,
+                        source="watchlist",
+                    ):
+                        watchlist_entered += 1
+                        open_positions.add(cand["symbol"])
+            except Exception as exc:
+                logger.warning("Watchlist scan failed: %s", exc)
+
         logger.info(
-            "Scan complete: %d symbols scored, %d qualify, %d slots open",
-            len(scored), len(candidates), slots_available,
+            "Scan done: entered %d (scanner=%d, watchlist=%d)",
+            scanner_entered + watchlist_entered, scanner_entered, watchlist_entered,
         )
 
-        for candidate in candidates[:slots_available]:
-            self._enter_play(candidate, equity)
+        # ── UPDATE ADAPTIVE RATIO ─────────────────────────────────────────────
+        _update_blend_ratio(scanner_pct, watchlist_pct)
 
-    def _enter_play(self, candidate: dict, equity: float) -> None:
-        """Submit a bracket order for a qualifying swing setup."""
+    def _enter_play(
+        self, candidate: dict, equity: float,
+        atr_stop_mult: float = ATR_STOP_MULT,
+        atr_target_mult: float = ATR_TARGET_MULT,
+        risk_pct: float = RISK_PER_TRADE,
+        source: str = "scanner",
+    ) -> bool:
+        """Submit a bracket order for a qualifying swing setup. Returns True on success."""
         sym = candidate["symbol"]
         bars = self._bar_history.get(sym)
         if bars is None or len(bars) < ATR_PERIOD + 2:
             logger.warning("Not enough bars for %s — skipping.", sym)
-            return
+            return False
 
         price = float(bars["close"].iloc[-1])
         atr = _compute_atr(bars)
         if atr <= 0:
-            return
+            return False
 
-        stop = round(price - atr * ATR_STOP_MULT, 2)
-        # Floor target at +7% so ATR doesn't set a target below the scale-out trigger
-        target = max(round(price + atr * ATR_TARGET_MULT, 2), round(price * 1.07, 2))
+        stop = round(price - atr * atr_stop_mult, 2)
+        target = max(round(price + atr * atr_target_mult, 2), round(price * 1.07, 2))
         risk_per_share = price - stop
         if risk_per_share <= 0:
-            return
+            return False
 
-        shares = int((equity * RISK_PER_TRADE) / risk_per_share)
+        shares = int((equity * risk_pct) / risk_per_share)
         if shares < 1:
-            logger.info("Position too small for %s (equity=%.0f, risk/share=%.2f) — skipping.",
-                        sym, equity, risk_per_share)
-            return
+            logger.info("Position too small for %s — skipping.", sym)
+            return False
 
         signals = candidate.get("firing_signals", [])
         score = candidate.get("score", 0)
+        strategy = signals[0] if signals else "composite"
 
         log_entry = {
-            "ts": datetime.utcnow().isoformat(),
-            "symbol": sym,
-            "score": score,
-            "signals": signals,
-            "entry": price,
-            "stop": stop,
-            "target": target,
-            "shares": shares,
-            "atr": round(atr, 4),
+            "ts": datetime.utcnow().isoformat(), "symbol": sym, "score": score,
+            "signals": signals, "entry": price, "stop": stop, "target": target,
+            "shares": shares, "atr": round(atr, 4), "source": source,
         }
 
         if self.dry_run:
             logger.info(
-                "[DRY-RUN] Would enter %s: score=%d signals=%s "
-                "%d shares @ $%.2f  stop=$%.2f  target=$%.2f",
-                sym, score, signals, shares, price, stop, target,
+                "[DRY-RUN] %s  %s: score=%d  %dsh @ $%.2f  stop=$%.2f  target=$%.2f",
+                source.upper(), sym, score, shares, price, stop, target,
             )
             self._recent_entries = (self._recent_entries + [log_entry])[-20:]
-            return
+            return True
 
         try:
             from core.regime_strategies import Signal
             signal = Signal(
-                symbol=sym,
-                direction="LONG",
-                confidence=score / 100.0,
-                entry_price=price,
-                stop_loss=stop,
-                take_profit=target,
-                position_size_pct=shares * price / equity,
-                leverage=1.0,
-                regime_id=0,
-                regime_name="SWING",
-                regime_probability=1.0,
+                symbol=sym, direction="LONG", confidence=score / 100.0,
+                entry_price=price, stop_loss=stop, take_profit=target,
+                position_size_pct=shares * price / equity, leverage=1.0,
+                regime_id=0, regime_name="SWING", regime_probability=1.0,
                 timestamp=datetime.utcnow(),
-                reasoning=f"swing score={score} signals={signals}",
-                strategy_name=signals[0] if signals else "composite",
+                reasoning=f"{source} score={score} signals={signals}",
+                strategy_name=strategy,
             )
             record = self._order_executor.submit_bracket_order(signal)
             self._open_order_records[sym] = record
@@ -631,13 +792,19 @@ class SwingTrader:
             self._position_tracker.set_stop(sym, stop)
             self._recent_entries = (self._recent_entries + [log_entry])[-20:]
             self._daily_entries += 1
-            logger.info(
-                "Entered %s: score=%d signals=%s  %d sh @ $%.2f  "
-                "stop=$%.2f  target=$%.2f  [trade_id=%s]",
-                sym, score, signals, shares, price, stop, target, record.trade_id,
+            _record_to_dashboard(
+                sym, "LONG", price, stop, target, shares, strategy,
+                f"{source} score={score} signals={','.join(signals)}", source,
             )
+            logger.info(
+                "[%s] Entered %s: score=%d  %dsh @ $%.2f  stop=$%.2f  target=$%.2f  R:R=%.1f:1",
+                source.upper(), sym, score, shares, price, stop, target,
+                (target - price) / (price - stop),
+            )
+            return True
         except Exception as exc:
             logger.error("Failed to enter %s: %s", sym, exc)
+            return False
 
     # ------------------------------------------------------------------
     # Trailing stop management
