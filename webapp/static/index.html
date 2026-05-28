@@ -1831,7 +1831,7 @@ function renderQueuedPlays(plays) {
     const bg = i % 2 === 1 ? 'background:#fffbeb' : 'background:#ffffff';
     return `<tr style="${bg}">
       <td class="brok-td-left">
-        <div class="brok-ticker" style="color:#92400e">${p.symbol}</div>
+        ${_clickableTicker(p)}
         <div class="brok-name" style="font-size:11px;max-width:220px;line-height:1.4">${convictionStatement(p.direction, p.signal)}</div>
       </td>
       <td class="brok-td">${shares}</td>
@@ -1875,7 +1875,7 @@ function renderActivePlays(plays) {
     const bg = i % 2 === 1 ? 'background:#f9fafb' : '';
     return `<tr style="${bg}">
       <td class="brok-td-left">
-        <div class="brok-ticker">${p.symbol}</div>
+        ${_clickableTicker(p)}
         <div class="brok-name" style="font-size:11px;max-width:220px;line-height:1.4">${convictionStatement(p.direction, p.signal)}</div>
       </td>
       <td class="brok-td">${shares}</td>
@@ -1910,7 +1910,7 @@ function renderClosedPlays(plays) {
     const capital = (p.entry_price||0) * (p.shares||0);
     const glColor = (p.pnl||0) >= 0 ? '#16a34a' : '#dc2626';
     return `<tr class="${i%2===1?'even':''}">
-      <td class="brok-td-left"><div class="brok-ticker">${p.symbol}</div><div class="brok-name">${p.direction}</div></td>
+      <td class="brok-td-left">${_clickableTicker(p)}<div class="brok-name">${p.direction}</div></td>
       <td class="brok-td">${fmt$(p.entry_price)}</td>
       <td class="brok-td">${fmt$(p.exit_price)}</td>
       <td class="brok-td">${fmt$(capital)}</td>
@@ -2130,6 +2130,22 @@ async function loadPlaysEquityCurve() {
   } catch(e) {}
 }
 
+// ── PLAY SOURCE BADGE HELPER ──────────────────────────────────────────
+function _sourceBadge(p) {
+  const isWatchlist = p.source === 'watchlist' || p.in_watchlist;
+  const isScanner   = p.source === 'scanner' || p.source === 'bot';
+  if (isWatchlist)
+    return `<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:1px 6px;border-radius:3px;display:inline-block;background:#ede9fe;color:#7c3aed">Watchlist</span>`;
+  if (isScanner)
+    return `<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:1px 6px;border-radius:3px;display:inline-block;background:#dbeafe;color:#1d4ed8">Hand Picks</span>`;
+  return '';
+}
+
+function _clickableTicker(p) {
+  return `<div class="brok-ticker" style="cursor:pointer;color:#4f46e5;text-decoration:underline;text-underline-offset:2px" onclick="openPlayDetail(${p.id})" title="View chart &amp; analysis">${p.symbol}</div>
+          <div style="margin-top:2px">${_sourceBadge(p)}</div>`;
+}
+
 // ── PLAY DETAIL MODAL ────────────────────────────────────────────────
 
 function _signalStudies(signal) {
@@ -2214,9 +2230,11 @@ async function openPlayDetail(playId) {
 
   const dir = (p.direction || 'LONG');
   const isLong = dir === 'LONG';
-  const srcLabel = p.source==='watchlist' ? 'Watchlist' : p.source==='scanner' ? 'Hand Picks' : p.source ? 'Manual' : '';
-  const srcBg    = p.source==='watchlist' ? '#ede9fe' : p.source==='scanner' ? '#dbeafe' : '#f1f5f9';
-  const srcClr   = p.source==='watchlist' ? '#7c3aed' : p.source==='scanner' ? '#1d4ed8' : '#64748b';
+  const isWL  = p.source === 'watchlist' || p.in_watchlist;
+  const isScan= !isWL && (p.source === 'scanner' || p.source === 'bot');
+  const srcLabel = isWL ? 'Watchlist' : isScan ? 'Hand Picks' : '';
+  const srcBg    = isWL ? '#ede9fe' : '#dbeafe';
+  const srcClr   = isWL ? '#7c3aed' : '#1d4ed8';
   document.getElementById('pd-title').innerHTML =
     `<span class="font-bold text-gray-900">${p.symbol}</span>
      <span style="font-size:13px;font-weight:700;color:${isLong ? '#16a34a' : '#dc2626'};margin-left:10px">${dir}</span>
@@ -2407,13 +2425,8 @@ function renderTradeBreakdown(plays) {
     const statusBg    = p.status === 'ACTIVE'  ? '#dcfce7' : p.status === 'PENDING' ? '#fef3c7' : '#f1f5f9';
     const statusColor = p.status === 'ACTIVE'  ? '#15803d' : p.status === 'PENDING' ? '#92400e' : '#64748b';
     const bg = i % 2 === 1 ? 'background:#f9fafb' : '';
-    return `<tr style="${bg};cursor:pointer" onclick="openPlayDetail(${p.id})" title="Click to view chart & analysis">
-      <td class="brok-td-left">
-        <div class="brok-ticker">${p.symbol}</div>
-        ${p.source ? `<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:1px 5px;border-radius:3px;margin-top:2px;display:inline-block;
-          background:${p.source==='watchlist'?'#ede9fe':p.source==='scanner'?'#dbeafe':'#f1f5f9'};
-          color:${p.source==='watchlist'?'#7c3aed':p.source==='scanner'?'#1d4ed8':'#64748b'}">${p.source==='watchlist'?'Watchlist':p.source==='scanner'?'Hand Picks':'Manual'}</span>` : ''}
-      </td>
+    return `<tr style="${bg}">
+      <td class="brok-td-left">${_clickableTicker(p)}</td>
       <td class="brok-td-left"><span style="color:${(p.direction||'LONG')==='LONG'?'#16a34a':'#dc2626'};font-weight:600;font-size:12px">${p.direction||'LONG'}</span></td>
       <td class="brok-td">${fmt$(entry)}</td>
       <td class="brok-td">${exitDisplay}</td>

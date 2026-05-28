@@ -1125,10 +1125,16 @@ def plays_equity_curve():
 @app.get("/api/plays")
 def list_plays(status: Optional[str] = None):
     with get_db() as conn:
+        base = """
+            SELECT p.*,
+                   CASE WHEN w.symbol IS NOT NULL THEN 1 ELSE 0 END AS in_watchlist
+            FROM plays p
+            LEFT JOIN watchlist w ON p.symbol = w.symbol
+        """
         if status:
-            rows = conn.execute("SELECT * FROM plays WHERE status=? ORDER BY created_at DESC", (status,)).fetchall()
+            rows = conn.execute(base + "WHERE p.status=? ORDER BY p.created_at DESC", (status,)).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM plays ORDER BY created_at DESC").fetchall()
+            rows = conn.execute(base + "ORDER BY p.created_at DESC").fetchall()
     plays = [dict(r) for r in rows]
     # Enrich active plays with current price
     for p in plays:
