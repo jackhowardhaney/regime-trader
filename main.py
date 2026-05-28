@@ -698,12 +698,28 @@ class SwingTrader:
                     and c["symbol"] not in open_positions
                 ]
                 logger.info("Watchlist: %d candidates (blend ≥ %d)", len(wl_candidates), WATCHLIST_MIN_BLEND)
+                end_str   = datetime.now().strftime("%Y-%m-%d")
+                start_str = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
                 for cand in wl_candidates:
                     if watchlist_entered >= watchlist_slots:
                         break
-                    # Build a pseudo-candidate using scanner score so _enter_play can log it
+                    wl_sym = cand["symbol"]
+                    # Fetch bars if this symbol isn't in the scanner universe
+                    if wl_sym not in self._bar_history and self._fetcher:
+                        try:
+                            df = self._fetcher.get_historical_bars(
+                                wl_sym, self._timeframe, start_str, end_str
+                            )
+                            if df is not None and not df.empty:
+                                self._bar_history[wl_sym] = df
+                            else:
+                                logger.debug("No bars for watchlist symbol %s — skipping", wl_sym)
+                                continue
+                        except Exception as exc:
+                            logger.debug("Bar fetch failed for watchlist %s: %s", wl_sym, exc)
+                            continue
                     wl_entry = {
-                        "symbol": cand["symbol"],
+                        "symbol": wl_sym,
                         "score": int(cand.get("blend_score", 0)),
                         "firing_signals": ["watchlist_blend"],
                     }
@@ -715,7 +731,7 @@ class SwingTrader:
                         source="watchlist",
                     ):
                         watchlist_entered += 1
-                        open_positions.add(cand["symbol"])
+                        open_positions.add(wl_sym)
             except Exception as exc:
                 logger.warning("Watchlist scan failed: %s", exc)
 

@@ -312,12 +312,13 @@ def _sync_alpaca_plays():
                                 conn.execute(
                                     """INSERT INTO plays
                                        (symbol, direction, status, entry_price, shares,
-                                        entry_date, signal, notes)
-                                       VALUES (?,?,?,?,?,?,?,?)""",
+                                        entry_date, signal, notes, source)
+                                       VALUES (?,?,?,?,?,?,?,?,?)""",
                                     (sym, "LONG", "ACTIVE", avg_entry, qty,
                                      datetime.utcnow().isoformat()[:10],
                                      "auto-sync",
-                                     "Auto-discovered from Alpaca position sync"),
+                                     "Auto-discovered from Alpaca position sync",
+                                     "scanner"),
                                 )
 
                     # Update existing plays
@@ -874,17 +875,15 @@ def watchlist_quotes():
             continue
         stored_score = row["score"] or 50
         stored_bsh   = row["bsh"] or "HOLD"
-        # Use stored score for auto-generated entries; re-score manual entries live
+        sig = get_signals(sym)
         if row["auto_generated"]:
+            # Use stored score/bsh for auto entries; only fetch live RSI
             buy_pct = stored_score
             bsh     = stored_bsh
-            sig     = get_signals(sym)
-            rsi     = sig.get("rsi", 50)
         else:
-            sig     = get_signals(sym)
             buy_pct = sig.get("buy_pct", 50)
             bsh     = sig.get("bsh", "HOLD")
-            rsi     = sig.get("rsi", 50)
+        rsi = sig.get("rsi", 50)
         results.append({**q,
                         "overall": "BULLISH" if buy_pct >= 60 else "BEARISH" if buy_pct <= 40 else "NEUTRAL",
                         "bsh": bsh,
@@ -1110,7 +1109,8 @@ def _blend_score(scanner_score: float, in_watchlist: bool, bt: Optional[dict]) -
     bt_bonus = 0.0
     if bt and bt.get("qualified"):
         pf = float(bt.get("profit_factor") or 1.0)
-        wr = float(bt.get("win_rate") or 50.0) / 100.0
+        # win_rate stored as percentage (0-100); guard against 0 triggering `or`
+        wr = float(bt["win_rate"] if bt.get("win_rate") is not None else 50.0) / 100.0
         bt_bonus = min(15.0, (pf - 1.0) * 8.0 + max(0.0, wr - 0.50) * 20.0)
     return min(100.0, base + bt_bonus)
 
@@ -1163,15 +1163,12 @@ def set_blend_ratio(body: dict):
 @app.get("/api/blend-analysis")
 def blend_analysis():
     with get_db() as conn:
-        # Source performance from closed plays
         src_rows = conn.execute(
             "SELECT source, pnl, pnl_pct FROM plays WHERE status='CLOSED' AND pnl IS NOT NULL"
         ).fetchall()
-        # Watchlist symbols + stored scores
         wl_rows = conn.execute(
             "SELECT symbol, score, bsh, notes FROM watchlist ORDER BY score DESC NULLS LAST"
         ).fetchall()
-        # Latest BT per symbol
         bt_rows = conn.execute(
             """SELECT s.symbol, s.win_rate, s.avg_return, s.profit_factor, s.qualified
                FROM symbol_backtests s
@@ -1179,6 +1176,9 @@ def blend_analysis():
                    SELECT symbol, MAX(run_at) AS latest FROM symbol_backtests GROUP BY symbol
                ) m ON s.symbol=m.symbol AND s.run_at=m.latest"""
         ).fetchall()
+        ratio_row = conn.execute(
+            "SELECT value FROM app_settings WHERE key='blend_ratio'"
+        ).fetchone()
 
     # Source performance breakdown
     src_perf: Dict[str, Any] = {}
@@ -1211,19 +1211,14 @@ def blend_analysis():
             "scanner_score": round(scanner_score, 1),
             "bsh": row["bsh"] or "HOLD",
             "bt_qualified": bool(bt and bt.get("qualified")),
-            "win_rate": round((bt.get("win_rate") or 0) * 100, 1) if bt else None,
+            # win_rate already stored as percent (0-100) — do NOT multiply again
+            "win_rate": round(bt.get("win_rate") or 0, 1) if bt else None,
             "profit_factor": round(bt.get("profit_factor") or 1.0, 2) if bt else None,
             "blend_score": round(blend, 1),
             "pos_size_pct": pos_pct,
         })
 
     candidates.sort(key=lambda x: x["blend_score"], reverse=True)
-
-    # Current ratio
-    with get_db() as conn:
-        ratio_row = conn.execute(
-            "SELECT value FROM app_settings WHERE key='blend_ratio'"
-        ).fetchone()
     current_ratio = json.loads(ratio_row["value"]) if ratio_row else _DEFAULT_RATIO
 
     return {
@@ -1492,7 +1487,7 @@ def history_metrics():
         "total_pnl": round(sum(pnls), 2),
         "n_trades": len(pnls),
         "win_rate": round(len(wins) / len(pnls) * 100, 1) if pnls else 0,
-        "profit_factor": round(sum(wins) / abs(sum(losses)), 2) if losses else 0,
+        "profit_factor": round(sum(wins) / abs(sum(losses)), 2) if losses else (999.0 if wins else 0),
         "avg_win": round(sum(wins) / len(wins), 2) if wins else 0,
         "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
         "monthly": [{"month": k, "pnl": round(v, 2)} for k, v in sorted(monthly.items())],
@@ -1779,8 +1774,14 @@ def _run_5y_backtest():
                 entry = float(open_.iloc[i + 1])
                 if entry <= 0:
                     continue
-                # ATR-based stop + target (current bot params)
-                atr14 = float(np.mean(high_arr[max(0, i-14):i+1] - low_arr[max(0, i-14):i+1]))
+                # True Range ATR (matches live bot: accounts for gaps)
+                s = max(1, i - 14)
+                prev_closes = close_.values[s - 1: i]
+                hl = high_arr[s:i + 1] - low_arr[s:i + 1]
+                hpc = np.abs(high_arr[s:i + 1] - prev_closes)
+                lpc = np.abs(low_arr[s:i + 1] - prev_closes)
+                tr14 = np.maximum(hl, np.maximum(hpc, lpc))
+                atr14 = float(np.mean(tr14)) if len(tr14) > 0 else 0.0
                 if atr14 <= 0:
                     continue
                 init_stop     = max(entry - atr14 * ATR_STOP_MULT, entry * 0.95)
