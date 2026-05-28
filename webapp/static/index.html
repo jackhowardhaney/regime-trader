@@ -964,6 +964,7 @@
     </div>
     <div class="flex gap-3 mt-5 justify-end">
       <button onclick="closeModal('modal-new-play')" class="btn btn-ghost">Cancel</button>
+      <input type="hidden" id="np-source" value="manual" />
       <button onclick="submitPlay()" class="btn btn-success">Create Play</button>
     </div>
   </div>
@@ -1565,7 +1566,7 @@ async function loadWatchlist() {
         <td class="px-4 py-3 text-center" onclick="event.stopPropagation()">
           <div class="flex gap-2 justify-center">
             <button onclick="analyzeSymbol('${q.symbol}')" class="btn btn-ghost text-xs py-1 px-2">Analyze</button>
-            <button onclick="prefillPlay('${q.symbol}',${q.price||0})" class="btn btn-primary text-xs py-1 px-2">+ Play</button>
+            <button onclick="prefillPlay('${q.symbol}',${q.price||0},null,null,'watchlist')" class="btn btn-primary text-xs py-1 px-2">+ Play</button>
             <button onclick="removeSymbol('${q.symbol}')" class="btn btn-ghost text-xs py-1 px-2 text-red-400 border-red-900 hover:bg-red-900/30">✕</button>
           </div>
         </td>
@@ -1753,7 +1754,7 @@ async function loadSymbolNews(sym) {
 
 function prefillPlayFromSig(s) {
   closeModal('modal-signals');
-  prefillPlay(s.symbol, s.suggested_entry, s.suggested_stop, s.suggested_target);
+  prefillPlay(s.symbol, s.suggested_entry, s.suggested_stop, s.suggested_target, 'watchlist');
 }
 
 // ── PLAYS ─────────────────────────────────────────────────────────────
@@ -1987,9 +1988,10 @@ async function fetchPlayLiveData() {
   btn.textContent = '↻'; btn.disabled = false;
 }
 
-function prefillPlay(sym, price, stop, target) {
+function prefillPlay(sym, price, stop, target, source) {
   openNewPlay();
   document.getElementById('np-symbol').value = sym;
+  document.getElementById('np-source').value = source || 'manual';
   if(price) document.getElementById('np-entry').value = price;
   if(stop)  document.getElementById('np-stop').value  = stop;
   if(target) document.getElementById('np-tp').value   = target;
@@ -2032,6 +2034,7 @@ async function submitPlay() {
         take_profit:tp, shares:shares,
         notes: document.getElementById('np-notes').value||null,
         submit_order: document.getElementById('np-submit-order').checked,
+        source: document.getElementById('np-source').value || 'manual',
       })
     });
     closeModal('modal-new-play');
@@ -2211,10 +2214,14 @@ async function openPlayDetail(playId) {
 
   const dir = (p.direction || 'LONG');
   const isLong = dir === 'LONG';
+  const srcLabel = p.source==='watchlist' ? 'Watchlist' : p.source==='scanner' ? 'Hand Picks' : p.source ? 'Manual' : '';
+  const srcBg    = p.source==='watchlist' ? '#ede9fe' : p.source==='scanner' ? '#dbeafe' : '#f1f5f9';
+  const srcClr   = p.source==='watchlist' ? '#7c3aed' : p.source==='scanner' ? '#1d4ed8' : '#64748b';
   document.getElementById('pd-title').innerHTML =
     `<span class="font-bold text-gray-900">${p.symbol}</span>
      <span style="font-size:13px;font-weight:700;color:${isLong ? '#16a34a' : '#dc2626'};margin-left:10px">${dir}</span>
-     <span style="font-size:12px;color:#9ca3af;margin-left:10px;font-weight:400">${(p.signal || '').replace(/_/g,' ')}</span>`;
+     <span style="font-size:12px;color:#9ca3af;margin-left:10px;font-weight:400">${(p.signal || '').replace(/_/g,' ')}</span>
+     ${srcLabel ? `<span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:2px 8px;border-radius:4px;margin-left:10px;background:${srcBg};color:${srcClr}">${srcLabel}</span>` : ''}`;
 
   // ── Price level bar ──
   const entry   = p.entry_price || 0;
@@ -2274,6 +2281,9 @@ async function openPlayDetail(playId) {
   tvEl.innerHTML = '';
   if (window.TradingView) {
     const studies = _signalStudies(p.signal);
+    // Set chart to start 2 weeks before entry so the setup context is visible
+    const entryMs = new Date(p.entry_date || p.created_at || Date.now()).getTime();
+    const fromTs  = Math.floor((entryMs - 14 * 24 * 3600 * 1000) / 1000);
     _pdTvWidget = new TradingView.widget({
       container_id: 'pd-tv-chart',
       symbol: p.symbol,
@@ -2288,6 +2298,7 @@ async function openPlayDetail(playId) {
       allow_symbol_change: false,
       save_image: false,
       studies: studies,
+      from: fromTs,
       width: '100%',
       height: 440,
     });
@@ -2397,7 +2408,12 @@ function renderTradeBreakdown(plays) {
     const statusColor = p.status === 'ACTIVE'  ? '#15803d' : p.status === 'PENDING' ? '#92400e' : '#64748b';
     const bg = i % 2 === 1 ? 'background:#f9fafb' : '';
     return `<tr style="${bg};cursor:pointer" onclick="openPlayDetail(${p.id})" title="Click to view chart & analysis">
-      <td class="brok-td-left"><div class="brok-ticker">${p.symbol}</div></td>
+      <td class="brok-td-left">
+        <div class="brok-ticker">${p.symbol}</div>
+        ${p.source ? `<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;padding:1px 5px;border-radius:3px;margin-top:2px;display:inline-block;
+          background:${p.source==='watchlist'?'#ede9fe':p.source==='scanner'?'#dbeafe':'#f1f5f9'};
+          color:${p.source==='watchlist'?'#7c3aed':p.source==='scanner'?'#1d4ed8':'#64748b'}">${p.source==='watchlist'?'Watchlist':p.source==='scanner'?'Hand Picks':'Manual'}</span>` : ''}
+      </td>
       <td class="brok-td-left"><span style="color:${(p.direction||'LONG')==='LONG'?'#16a34a':'#dc2626'};font-weight:600;font-size:12px">${p.direction||'LONG'}</span></td>
       <td class="brok-td">${fmt$(entry)}</td>
       <td class="brok-td">${exitDisplay}</td>

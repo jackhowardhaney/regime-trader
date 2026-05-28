@@ -41,6 +41,8 @@ RESULTS_DIR = Path(os.getenv("RESULTS_DIR", str(ROOT / "results")))
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── App ────────────────────────────────────────────────────────────
+DEPLOY_TIME = datetime.utcnow()
+
 app = FastAPI(title="Regime Trader")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -149,6 +151,10 @@ def init_db():
             conn.execute("ALTER TABLE watchlist ADD COLUMN bsh TEXT DEFAULT 'HOLD'")
         if "auto_generated" not in existing:
             conn.execute("ALTER TABLE watchlist ADD COLUMN auto_generated INTEGER DEFAULT 0")
+        # Migrate plays table — add source column if missing
+        play_cols = [r[1] for r in conn.execute("PRAGMA table_info(plays)").fetchall()]
+        if "source" not in play_cols:
+            conn.execute("ALTER TABLE plays ADD COLUMN source TEXT DEFAULT 'scanner'")
 
 
 _daily_scan_lock = threading.Lock()
@@ -367,6 +373,7 @@ class PlayCreate(BaseModel):
     signal: Optional[str] = None
     notes: Optional[str] = None
     submit_order: bool = False
+    source: Optional[str] = "scanner"
 
 
 class PlayUpdate(BaseModel):
@@ -817,6 +824,12 @@ def _run_backtest(symbols: List[str], start: str, end: str):
         _bt.update({"running": False, "error": str(e) + "\n" + _tb.format_exc()[-800:]})
 
 
+# ── Build info ────────────────────────────────────────────────────
+@app.get("/api/build_info")
+def build_info():
+    return {"deployed_at": DEPLOY_TIME.strftime("%b %d %Y, %-I:%M %p") + " UTC"}
+
+
 # ── Watchlist routes ───────────────────────────────────────────────
 @app.get("/api/watchlist")
 def list_watchlist():
@@ -1168,11 +1181,11 @@ def create_play(body: PlayCreate):
     with get_db() as conn:
         cur = conn.execute(
             """INSERT INTO plays (symbol,direction,status,entry_price,stop_loss,take_profit,
-               shares,entry_date,signal,notes,alpaca_order_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+               shares,entry_date,signal,notes,alpaca_order_id,source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
             (sym, body.direction, status, body.entry_price, body.stop_loss,
              body.take_profit, body.shares, datetime.utcnow().isoformat(),
-             body.signal, body.notes, alpaca_order_id),
+             body.signal, body.notes, alpaca_order_id, body.source or "scanner"),
         )
         pid = cur.lastrowid
 
