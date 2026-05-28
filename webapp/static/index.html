@@ -396,6 +396,51 @@
     </div>
   </div>
 
+  <!-- Blend Analysis card -->
+  <div class="card overflow-hidden mb-5" id="blend-card">
+    <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+      <div>
+        <h3 class="font-medium text-gray-900">Watchlist × Scanner Blend</h3>
+        <p class="text-xs text-gray-500 mt-0.5">Watchlist conviction (×1.25) + scanner signal + 90-day BT quality = ranked play candidates</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="toggleBlendFormula()" id="blend-formula-btn" class="btn btn-ghost text-xs">How it works</button>
+        <button onclick="loadBlendAnalysis()" class="btn btn-ghost text-xs">↻ Refresh</button>
+      </div>
+    </div>
+    <!-- Formula explainer (collapsed) -->
+    <div id="blend-formula" class="hidden px-4 py-3 bg-indigo-50 border-b border-indigo-100">
+      <div class="grid grid-cols-3 gap-4 text-xs text-indigo-700">
+        <div>
+          <div class="font-bold mb-1">① Scanner Score (0–100)</div>
+          <p class="text-indigo-600">Composite signal from RSI, MACD, EMA, Bollinger Bands, volume — same engine that picks trades autonomously.</p>
+        </div>
+        <div>
+          <div class="font-bold mb-1">② Watchlist Conviction ×1.25</div>
+          <p class="text-indigo-600">If you're watching a symbol, you have context the scanner can't see: sector catalysts, earnings, chart narrative. That earns a 25% score boost.</p>
+        </div>
+        <div>
+          <div class="font-bold mb-1">③ BT Quality Bonus (+0 to +15)</div>
+          <p class="text-indigo-600">90-day backtest profit factor and win rate add up to 15 extra points. Formula: (PF−1)×8 + max(0, WR−50%)×20. Only applies if BT passed the quality gate.</p>
+        </div>
+      </div>
+      <div class="mt-3 pt-3 border-t border-indigo-200 text-xs text-indigo-600">
+        <span class="font-bold">Position sizing from blend score:</span>
+        <span class="ml-3">≥90 → 6.5% risk</span>
+        <span class="ml-3">≥80 → 5.5% risk</span>
+        <span class="ml-3">≥70 → 5.0% risk</span>
+        <span class="ml-3">≥60 → 3.5% risk</span>
+        <span class="ml-3">&lt;60 → skip</span>
+      </div>
+    </div>
+    <!-- Source performance comparison -->
+    <div id="blend-source-perf" class="hidden px-4 py-3 border-b border-gray-100"></div>
+    <!-- Candidates table -->
+    <div id="blend-body">
+      <div class="px-4 py-8 text-center text-gray-400 text-sm">Loading blend analysis…</div>
+    </div>
+  </div>
+
   <!-- Sub-tabs -->
   <div class="flex gap-4 mb-4 border-b border-gray-200">
     <button onclick="setPlaysTab('active')" id="plays-tab-active" class="tab-active pb-3 text-sm font-medium">Active</button>
@@ -1057,6 +1102,7 @@ function switchTab(t) {
   } else if(t==='plays') {
     loadPlays();
     loadPlaysEquityCurve();
+    loadBlendAnalysis();
     initBotSlideshow('bot-info-plays');
     refreshTimer = setInterval(loadPlays, 15000);
   } else if(t==='backtest') {
@@ -1758,6 +1804,119 @@ function prefillPlayFromSig(s) {
 }
 
 // ── PLAYS ─────────────────────────────────────────────────────────────
+function toggleBlendFormula() {
+  const el = document.getElementById('blend-formula');
+  const btn = document.getElementById('blend-formula-btn');
+  const hidden = el.classList.toggle('hidden');
+  btn.textContent = hidden ? 'How it works' : 'Hide formula';
+}
+
+async function loadBlendAnalysis() {
+  document.getElementById('blend-body').innerHTML =
+    '<div class="px-4 py-8 text-center text-gray-400 text-sm">Loading…</div>';
+  try {
+    const d = await api('/api/blend-analysis');
+
+    // ── Source performance banner ──
+    const perfEl = document.getElementById('blend-source-perf');
+    const srcKeys = Object.keys(d.source_performance || {});
+    if (srcKeys.length) {
+      const mkSrc = (src, label, color) => {
+        const s = d.source_performance[src];
+        if (!s) return `<div style="opacity:0.4;text-align:center"><div style="font-size:11px;font-weight:700;color:${color};margin-bottom:2px">${label}</div><div style="font-size:12px;color:#6b7280">No closed plays yet</div></div>`;
+        const pnlColor = s.total_pnl >= 0 ? '#16a34a' : '#dc2626';
+        return `<div style="text-align:center">
+          <div style="font-size:11px;font-weight:700;color:${color};margin-bottom:4px">${label}</div>
+          <div style="font-size:18px;font-weight:800;color:${pnlColor};font-family:monospace">${s.total_pnl >= 0 ? '+' : ''}$${s.total_pnl.toFixed(0)}</div>
+          <div style="font-size:11px;color:#6b7280">${s.count} plays · ${s.win_rate}% win rate · avg ${s.avg_pnl >= 0 ? '+' : ''}$${s.avg_pnl.toFixed(0)}/trade</div>
+        </div>`;
+      };
+      perfEl.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center">
+          ${mkSrc('scanner', 'Hand Picks (Bot Scanner)', '#1d4ed8')}
+          <div style="text-align:center;font-size:11px;color:#9ca3af;padding:0 8px">vs</div>
+          ${mkSrc('watchlist', 'Watchlist (Your Picks)', '#7c3aed')}
+        </div>
+        <p style="font-size:11px;color:#9ca3af;margin-top:8px;text-align:center">Use Watchlist → Analyze → Create Play to start building watchlist play history</p>`;
+      perfEl.classList.remove('hidden');
+    }
+
+    // ── Candidates table ──
+    const cands = d.candidates || [];
+    if (!cands.length) {
+      document.getElementById('blend-body').innerHTML =
+        '<div class="px-4 py-8 text-center text-gray-400 text-sm">Add symbols to your Watchlist to see blend candidates here.</div>';
+      return;
+    }
+
+    const rows = cands.map((c, i) => {
+      const blendColor = c.blend_score >= 90 ? '#15803d' : c.blend_score >= 80 ? '#16a34a' : c.blend_score >= 70 ? '#4f46e5' : c.blend_score >= 60 ? '#d97706' : '#9ca3af';
+      const bshBg    = c.bsh==='BUY'?'#14532d':c.bsh==='SELL'?'#7f1d1d':'#422006';
+      const bshClr   = c.bsh==='BUY'?'#4ade80':c.bsh==='SELL'?'#f87171':'#fbbf24';
+      const btTag    = c.bt_qualified
+        ? `<span style="font-size:10px;background:#dcfce7;color:#15803d;padding:1px 6px;border-radius:3px;font-weight:700">BT✓</span>`
+        : `<span style="font-size:10px;background:#f1f5f9;color:#9ca3af;padding:1px 6px;border-radius:3px">no BT</span>`;
+      const posTag = c.pos_size_pct
+        ? `<span style="font-size:11px;font-weight:700;color:#4f46e5">${c.pos_size_pct}%</span>`
+        : `<span style="font-size:11px;color:#9ca3af">—</span>`;
+      const bg = i % 2 === 1 ? 'background:#f9fafb' : '';
+      return `<tr style="${bg}">
+        <td class="px-4 py-2.5">
+          <span class="font-bold text-gray-900 text-sm cursor-pointer hover:text-indigo-600" onclick="analyzeSymbol('${c.symbol}')" title="Analyze ${c.symbol}">${c.symbol}</span>
+        </td>
+        <td class="px-3 py-2.5 text-right">
+          <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end">
+            <div style="width:60px;height:5px;border-radius:99px;background:#e5e7eb;overflow:hidden">
+              <div style="height:100%;width:${c.scanner_score}%;background:#94a3b8;border-radius:99px"></div>
+            </div>
+            <span class="text-xs text-gray-500 font-mono">${c.scanner_score}</span>
+          </div>
+        </td>
+        <td class="px-3 py-2.5 text-center">
+          <span style="display:inline-flex;padding:1px 8px;border-radius:99px;font-size:11px;font-weight:700;background:${bshBg};color:${bshClr}">${c.bsh}</span>
+        </td>
+        <td class="px-3 py-2.5 text-center">${btTag}</td>
+        <td class="px-4 py-2.5 text-right">
+          <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end">
+            <div style="width:60px;height:6px;border-radius:99px;background:#e5e7eb;overflow:hidden">
+              <div style="height:100%;width:${Math.min(100,c.blend_score)}%;background:${blendColor};border-radius:99px"></div>
+            </div>
+            <span style="font-size:13px;font-weight:800;color:${blendColor};font-family:monospace;min-width:32px;text-align:right">${c.blend_score}</span>
+          </div>
+        </td>
+        <td class="px-3 py-2.5 text-center">${posTag} <span style="font-size:10px;color:#9ca3af">risk</span></td>
+        <td class="px-3 py-2.5 text-center">
+          <button onclick="prefillPlay('${c.symbol}',0,null,null,'watchlist')" class="btn btn-primary text-xs py-1 px-2">+ Play</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    document.getElementById('blend-body').innerHTML = `
+      <div style="overflow-x:auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-gray-400 text-xs uppercase tracking-wider bg-gray-50">
+              <th class="text-left px-4 py-2">Symbol</th>
+              <th class="text-right px-3 py-2">Scanner</th>
+              <th class="text-center px-3 py-2">BSH</th>
+              <th class="text-center px-3 py-2">90-Day BT</th>
+              <th class="text-right px-4 py-2">Blend Score</th>
+              <th class="text-center px-3 py-2">Pos Size</th>
+              <th class="text-center px-3 py-2"></th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div style="padding:8px 16px;background:#f8fafc;border-top:1px solid #e5e7eb">
+        <p style="font-size:11px;color:#9ca3af">Blend = scanner score ×1.25 (watchlist bonus) + up to +15 pts backtest quality. Symbols ranked highest should be your next plays.</p>
+      </div>`;
+  } catch(e) {
+    document.getElementById('blend-body').innerHTML =
+      `<div class="px-4 py-6 text-red-400 text-sm">${e.message}</div>`;
+  }
+}
+
 function setPlaysTab(t) {
   playsSubTab = t;
   document.getElementById('plays-active-list').classList.toggle('hidden', t!=='active');
@@ -2854,7 +3013,7 @@ function refreshAll() {
   let p;
   if(active==='watchlist') p = loadWatchlist();
   else if(active==='scanner') p = Promise.resolve(initScanner());
-  else if(active==='plays') p = Promise.all([loadPlays(), loadPlaysEquityCurve()]);
+  else if(active==='plays') p = Promise.all([loadPlays(), loadPlaysEquityCurve(), loadBlendAnalysis()]);
   else if(active==='backtest') p = Promise.all([loadPlaysBacktest(), loadResearch(), loadForwardTest()]);
   else if(active==='history') p = loadHistory();
   else p = Promise.resolve();

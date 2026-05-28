@@ -1102,6 +1102,97 @@ def symbol_news(symbol: str):
     return payload
 
 
+# ── Blend Analysis ─────────────────────────────────────────────────
+def _blend_score(scanner_score: float, in_watchlist: bool, bt: Optional[dict]) -> float:
+    """Compute blended conviction score for a symbol candidate."""
+    conviction_mult = 1.25 if in_watchlist else 1.0
+    base = float(scanner_score or 50) * conviction_mult
+    bt_bonus = 0.0
+    if bt and bt.get("qualified"):
+        pf = float(bt.get("profit_factor") or 1.0)
+        wr = float(bt.get("win_rate") or 50.0) / 100.0
+        bt_bonus = min(15.0, (pf - 1.0) * 8.0 + max(0.0, wr - 0.50) * 20.0)
+    return min(100.0, base + bt_bonus)
+
+
+def _pos_size_from_blend(blend: float) -> Optional[float]:
+    if blend >= 90: return 6.5
+    if blend >= 80: return 5.5
+    if blend >= 70: return 5.0
+    if blend >= 60: return 3.5
+    return None
+
+
+@app.get("/api/blend-analysis")
+def blend_analysis():
+    with get_db() as conn:
+        # Source performance from closed plays
+        src_rows = conn.execute(
+            "SELECT source, pnl, pnl_pct FROM plays WHERE status='CLOSED' AND pnl IS NOT NULL"
+        ).fetchall()
+        # Watchlist symbols + stored scores
+        wl_rows = conn.execute(
+            "SELECT symbol, score, bsh, notes FROM watchlist ORDER BY score DESC NULLS LAST"
+        ).fetchall()
+        # Latest BT per symbol
+        bt_rows = conn.execute(
+            """SELECT s.symbol, s.win_rate, s.avg_return, s.profit_factor, s.qualified
+               FROM symbol_backtests s
+               INNER JOIN (
+                   SELECT symbol, MAX(run_at) AS latest FROM symbol_backtests GROUP BY symbol
+               ) m ON s.symbol=m.symbol AND s.run_at=m.latest"""
+        ).fetchall()
+
+    # Source performance breakdown
+    src_perf: Dict[str, Any] = {}
+    for r in src_rows:
+        src = r["source"] or "scanner"
+        if src not in src_perf:
+            src_perf[src] = {"count": 0, "total_pnl": 0.0, "wins": 0}
+        src_perf[src]["count"] += 1
+        src_perf[src]["total_pnl"] += r["pnl"] or 0
+        if (r["pnl"] or 0) > 0:
+            src_perf[src]["wins"] += 1
+    for src, d in src_perf.items():
+        n = d["count"] or 1
+        d["avg_pnl"] = round(d["total_pnl"] / n, 2)
+        d["win_rate"] = round(d["wins"] / n * 100, 1)
+        d["total_pnl"] = round(d["total_pnl"], 2)
+
+    bt_map = {r["symbol"]: dict(r) for r in bt_rows}
+
+    # Score each watchlist symbol
+    candidates = []
+    for row in wl_rows:
+        sym = row["symbol"]
+        scanner_score = float(row["score"] or 50)
+        bt = bt_map.get(sym)
+        blend = _blend_score(scanner_score, True, bt)
+        pos_pct = _pos_size_from_blend(blend)
+        candidates.append({
+            "symbol": sym,
+            "scanner_score": round(scanner_score, 1),
+            "bsh": row["bsh"] or "HOLD",
+            "bt_qualified": bool(bt and bt.get("qualified")),
+            "win_rate": round((bt.get("win_rate") or 0) * 100, 1) if bt else None,
+            "profit_factor": round(bt.get("profit_factor") or 1.0, 2) if bt else None,
+            "blend_score": round(blend, 1),
+            "pos_size_pct": pos_pct,
+        })
+
+    candidates.sort(key=lambda x: x["blend_score"], reverse=True)
+
+    return {
+        "source_performance": src_perf,
+        "candidates": candidates[:25],
+        "formula": {
+            "conviction_mult": "×1.25 for watchlist symbols (human monitoring = 25% score boost)",
+            "bt_bonus": "Up to +15 pts: (profit_factor−1)×8 + (win_rate−50%)×20 — only if 90-day BT passed",
+            "pos_sizing": "≥90→6.5% | ≥80→5.5% | ≥70→5.0% | ≥60→3.5% | <60→skip",
+        },
+    }
+
+
 # ── Plays routes ───────────────────────────────────────────────────
 @app.get("/api/plays/equity-curve")
 def plays_equity_curve():
