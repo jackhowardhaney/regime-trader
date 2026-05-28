@@ -1550,10 +1550,10 @@ async function rescanWatchlist() {
   btn.disabled = false; btn.innerHTML = '&#8635; Rescan';
 }
 
-async function loadWatchlist() {
+async function loadWatchlist(fresh = false) {
   const tbody = document.getElementById('watchlist-body');
   try {
-    const data = await api('/api/watchlist/quotes');
+    const data = await api(fresh ? '/api/watchlist/quotes?fresh=1' : '/api/watchlist/quotes');
     const quotes = data.quotes || data;   // backwards-compat if old shape
     const lastRefresh = data.last_refresh;
 
@@ -1926,9 +1926,10 @@ function setPlaysTab(t) {
   loadPlays();
 }
 
-async function loadPlays() {
+async function loadPlays(fresh = false) {
   try {
-    const [plays, port] = await Promise.all([api('/api/plays'), api('/api/portfolio')]);
+    const playsUrl = fresh ? '/api/plays?fresh=1' : '/api/plays';
+    const [plays, port] = await Promise.all([api(playsUrl), api('/api/portfolio')]);
     _playsCache = {};
     plays.forEach(p => { _playsCache[p.id] = p; });
     renderQueuedPlays(plays.filter(p=>p.status==='PENDING'));
@@ -3011,9 +3012,9 @@ function refreshAll() {
   const active = TABS.find(t=>!document.getElementById('page-'+t).classList.contains('hidden'));
   const done = () => { btn.disabled = false; btn.innerHTML = '&#8635; Refresh'; };
   let p;
-  if(active==='watchlist') p = loadWatchlist();
+  if(active==='watchlist') p = loadWatchlist(true);
   else if(active==='scanner') p = Promise.resolve(initScanner());
-  else if(active==='plays') p = Promise.all([loadPlays(), loadPlaysEquityCurve(), loadBlendAnalysis()]);
+  else if(active==='plays') p = Promise.all([loadPlays(true), loadPlaysEquityCurve(), loadBlendAnalysis()]);
   else if(active==='backtest') p = Promise.all([loadPlaysBacktest(), loadResearch(), loadForwardTest()]);
   else if(active==='history') p = loadHistory();
   else p = Promise.resolve();

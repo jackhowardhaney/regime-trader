@@ -858,7 +858,7 @@ def del_watchlist(symbol: str):
 
 
 @app.get("/api/watchlist/quotes")
-def watchlist_quotes():
+def watchlist_quotes(fresh: bool = False):
     with get_db() as conn:
         rows = conn.execute(
             "SELECT symbol, score, bsh, auto_generated FROM watchlist"
@@ -867,6 +867,11 @@ def watchlist_quotes():
             "SELECT value FROM app_settings WHERE key='watchlist_scan_ts'"
         ).fetchone()
     last_refresh = scan_ts["value"] if scan_ts else None
+    if fresh:
+        for row in rows:
+            sym = row["symbol"]
+            _cache.pop(f"q:{sym}", None)
+            _cache.pop(f"sig:{sym}", None)
     results = []
     for row in rows:
         sym = row["symbol"]
@@ -1256,7 +1261,7 @@ def plays_equity_curve():
 
 
 @app.get("/api/plays")
-def list_plays(status: Optional[str] = None):
+def list_plays(status: Optional[str] = None, fresh: bool = False):
     with get_db() as conn:
         base = """
             SELECT p.*,
@@ -1269,6 +1274,10 @@ def list_plays(status: Optional[str] = None):
         else:
             rows = conn.execute(base + "ORDER BY p.created_at DESC").fetchall()
     plays = [dict(r) for r in rows]
+    if fresh:
+        for p in plays:
+            if p["status"] in ("ACTIVE", "PENDING"):
+                _cache.pop(f"q:{p['symbol']}", None)
     # Enrich active plays with current price
     for p in plays:
         if p["status"] in ("ACTIVE", "PENDING"):
