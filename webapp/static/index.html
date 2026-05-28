@@ -7,6 +7,7 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://www.youtube.com/iframe_api"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://s3.tradingview.com/tv.js"></script>
 <script>
   tailwind.config = {
     theme: {
@@ -104,7 +105,10 @@
       <svg class="w-6 h-6 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
       </svg>
-      <span class="font-semibold text-gray-900 text-lg tracking-tight">Twan Automatic Trader</span>
+      <div class="flex flex-col leading-tight">
+        <span class="font-semibold text-gray-900 text-lg tracking-tight">Twan Automatic Trader</span>
+        <span id="deploy-label" class="text-xs text-gray-400" style="font-size:10px">deployed —</span>
+      </div>
       <span class="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full ml-1">PAPER</span>
     </div>
     <!-- Tabs -->
@@ -984,6 +988,28 @@
 </div>
 
 <!-- ══════════════════════════════════════════════════
+     MODAL: Play Detail
+     ══════════════════════════════════════════════════ -->
+<div id="modal-play-detail" class="modal-overlay hidden">
+  <div class="modal-box" style="width:min(980px,96vw);max-height:92vh;overflow-y:auto;padding:24px">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-semibold text-gray-900" id="pd-title">Play Detail</h2>
+      <button onclick="closeModal('modal-play-detail')" class="text-gray-400 hover:text-gray-900 text-xl leading-none">&times;</button>
+    </div>
+    <!-- Price level bar -->
+    <div id="pd-levels" class="mb-4"></div>
+    <!-- TradingView chart -->
+    <div class="rounded-lg overflow-hidden border border-gray-200 mb-4" style="height:440px">
+      <div id="pd-tv-chart" style="height:100%"></div>
+    </div>
+    <!-- Signal analysis + news -->
+    <div id="pd-signals-body">
+      <div class="text-center py-6 text-gray-400 text-sm">Loading analysis…</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════
      JAVASCRIPT
      ══════════════════════════════════════════════════ -->
 <script>
@@ -993,6 +1019,8 @@ let historyData = [], historySort = {col:'exit_date', asc:false};
 let playsSubTab = 'active';
 let refreshTimer = null;
 let btPoller = null;
+let _playsCache = {};
+let _pdTvWidget = null;
 
 // ── Utility ──────────────────────────────────────────────────────────
 async function api(path, opts={}) {
@@ -1741,6 +1769,8 @@ function setPlaysTab(t) {
 async function loadPlays() {
   try {
     const [plays, port] = await Promise.all([api('/api/plays'), api('/api/portfolio')]);
+    _playsCache = {};
+    plays.forEach(p => { _playsCache[p.id] = p; });
     renderQueuedPlays(plays.filter(p=>p.status==='PENDING'));
     renderActivePlays(plays.filter(p=>p.status==='ACTIVE'));
     renderClosedPlays(plays.filter(p=>p.status==='CLOSED'));
@@ -2097,6 +2127,244 @@ async function loadPlaysEquityCurve() {
   } catch(e) {}
 }
 
+// ── PLAY DETAIL MODAL ────────────────────────────────────────────────
+
+function _signalStudies(signal) {
+  const s = (signal || '').toLowerCase();
+  if (s.includes('ema') || s.includes('ma_cross') || s.includes('golden'))
+    return ['MAExp@tv-basicstudies', 'RSI@tv-basicstudies'];
+  if (s.includes('macd'))
+    return ['MACD@tv-basicstudies', 'RSI@tv-basicstudies'];
+  if (s.includes('bb') || s.includes('bollinger'))
+    return ['BB@tv-basicstudies', 'RSI@tv-basicstudies'];
+  if (s.includes('rsi'))
+    return ['RSI@tv-basicstudies', 'MACD@tv-basicstudies'];
+  if (s.includes('volume') || s.includes('momentum') || s.includes('breakout'))
+    return ['RSI@tv-basicstudies', 'MACD@tv-basicstudies'];
+  return ['RSI@tv-basicstudies', 'MACD@tv-basicstudies', 'BB@tv-basicstudies'];
+}
+
+function _signalExplanation(signal, direction, entry, stop, target, s) {
+  const sig = (signal || '').toLowerCase();
+  const isLong = (direction || 'LONG') === 'LONG';
+  const rr = entry && stop && target && Math.abs(entry - stop) > 0
+    ? (Math.abs(target - entry) / Math.abs(entry - stop)).toFixed(1) : null;
+  const base = `Entered ${isLong ? 'LONG' : 'SHORT'} at ${fmt$(entry)} · Stop ${fmt$(stop)} · Target ${fmt$(target)}${rr ? ` · ${rr}:1 R:R` : ''}.`;
+  if (sig.includes('ema') || sig.includes('ma_bounce'))
+    return base + ` Price pulled back to the 20/50-day EMA in an established uptrend — RSI reset into the 40–55 zone signals trend continuation, not reversal.`;
+  if (sig.includes('macd'))
+    return base + ` MACD crossed above its signal line with the histogram flipping positive — short-term momentum is accelerating and buyers are in control.`;
+  if (sig.includes('rsi'))
+    return base + ` RSI reset to oversold territory (${s.rsi?.toFixed(0) || '<30'}) while price held above key support — exhausted sellers, high-probability bounce setup.`;
+  if (sig.includes('bb') || sig.includes('bollinger'))
+    return base + ` Bollinger Band squeeze: volatility compressed for multiple bars, primed for an expansion move. Price positioned near the lower band for a long entry.`;
+  if (sig.includes('volume'))
+    return base + ` Volume ${s.vol_ratio?.toFixed(1) || ''}× above average with price breaking a key level — unusual institutional activity ahead of a directional move.`;
+  if (sig.includes('golden') || sig.includes('cross'))
+    return base + ` The 50-day MA crossed above the 200-day MA — a confirmed long-term trend shift with strong historical follow-through.`;
+  return base + ` Composite signal score crossed the threshold with multiple indicators aligned in the same direction.`;
+}
+
+async function _loadPlayNews(sym) {
+  const loadingEl = document.getElementById(`pd-news-loading-${sym}`);
+  const headerEl  = document.getElementById(`pd-news-header-${sym}`);
+  const bodyEl    = document.getElementById(`pd-news-body-${sym}`);
+  if (!bodyEl) return;
+  try {
+    const data = await api(`/api/news/${sym}`);
+    if (loadingEl) loadingEl.remove();
+    const articles = data.articles || [];
+    const newsScore = data.news_score ?? null;
+    const scoreLabel = data.score_label || '';
+    const scoreColor = data.score_color || '#d97706';
+    if (headerEl && newsScore !== null) {
+      headerEl.insertAdjacentHTML('beforeend',
+        `<span style="margin-left:auto;display:inline-flex;align-items:center;gap:5px;background:${scoreColor}18;border:1px solid ${scoreColor}44;border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700;color:${scoreColor}">
+          News: ${newsScore}/100 &middot; ${scoreLabel}</span>`);
+    }
+    if (!articles.length) { bodyEl.innerHTML = '<p style="font-size:12px;color:#9ca3af;padding:4px 0">No recent news.</p>'; return; }
+    bodyEl.innerHTML = articles.map(a => {
+      const srcColor = _SOURCE_COLORS[a.source_tag] || '#6b7280';
+      const summary = a.summary ? `<p style="font-size:11px;color:#4b5563;line-height:1.5;margin-bottom:4px">${a.summary}</p>` : '';
+      return `<div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:6px;background:#fff">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:4px">
+          <a href="${a.url}" target="_blank" rel="noopener" style="font-size:12px;font-weight:600;color:#1d4ed8;line-height:1.4;text-decoration:none;flex:1"
+             onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${a.headline}</a>
+          <span style="display:inline-flex;align-items:center;padding:1px 8px;border-radius:99px;font-size:11px;font-weight:700;color:#fff;background:${a.color};white-space:nowrap;flex-shrink:0">${a.sentiment}</span>
+        </div>
+        ${summary}
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:10px;font-weight:600;color:${srcColor};background:${srcColor}15;padding:1px 6px;border-radius:4px">${a.source}</span>
+          ${a.published ? `<span style="font-size:10px;color:#9ca3af">${a.published}</span>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    if (loadingEl) loadingEl.textContent = 'News unavailable';
+  }
+}
+
+async function openPlayDetail(playId) {
+  const p = _playsCache[playId];
+  if (!p) return;
+  openModal('modal-play-detail');
+
+  const dir = (p.direction || 'LONG');
+  const isLong = dir === 'LONG';
+  document.getElementById('pd-title').innerHTML =
+    `<span class="font-bold text-gray-900">${p.symbol}</span>
+     <span style="font-size:13px;font-weight:700;color:${isLong ? '#16a34a' : '#dc2626'};margin-left:10px">${dir}</span>
+     <span style="font-size:12px;color:#9ca3af;margin-left:10px;font-weight:400">${(p.signal || '').replace(/_/g,' ')}</span>`;
+
+  // ── Price level bar ──
+  const entry   = p.entry_price || 0;
+  const stop    = p.stop_loss   || 0;
+  const tgt     = p.take_profit || 0;
+  const stopPct = entry > 0 && stop ? ((stop  - entry) / entry * 100).toFixed(2) : null;
+  const tgtPct  = entry > 0 && tgt  ? ((tgt   - entry) / entry * 100).toFixed(2) : null;
+  const stopDist = entry > 0 && stop ? Math.abs(entry - stop) : 0;
+  const tgtDist  = entry > 0 && tgt  ? Math.abs(tgt - entry)  : 0;
+  const rr = stopDist > 0 ? (tgtDist / stopDist).toFixed(2) : null;
+  const rrColor = rr == null ? '#6b7280' : rr >= 2.5 ? '#16a34a' : rr >= 1.5 ? '#d97706' : '#dc2626';
+
+  let pnl = null, pnlPct = null;
+  if (p.status === 'CLOSED' && p.pnl != null) { pnl = p.pnl; pnlPct = p.pnl_pct; }
+  else if (p.status === 'ACTIVE' && p.current_pnl != null) {
+    pnl = p.current_pnl;
+    pnlPct = entry > 0 && p.current_price ? (p.current_price - entry) / entry * 100 : null;
+  }
+
+  document.getElementById('pd-levels').innerHTML = `
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:16px 20px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px;text-align:center">
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Stop Loss</div>
+          <div style="font-size:20px;font-weight:800;color:#dc2626;font-family:monospace">${fmt$(stop)}</div>
+          <div style="font-size:12px;color:#fca5a5">${stopPct !== null ? stopPct + '%' : '—'}</div>
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#4f46e5;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Entry</div>
+          <div style="font-size:24px;font-weight:900;color:#4f46e5;font-family:monospace">${fmt$(entry)}</div>
+          <div style="font-size:11px;color:#9ca3af">${fmtDate(p.entry_date || p.created_at)}</div>
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:1px;margin-bottom:3px">Target</div>
+          <div style="font-size:20px;font-weight:800;color:#16a34a;font-family:monospace">${fmt$(tgt)}</div>
+          <div style="font-size:12px;color:#86efac">${tgtPct !== null ? '+' + tgtPct + '%' : '—'}</div>
+        </div>
+      </div>
+      <div style="display:flex;height:12px;border-radius:99px;overflow:hidden;margin-bottom:10px">
+        <div style="flex:${stopDist || 1};background:linear-gradient(90deg,#fca5a5,#ef4444)"></div>
+        <div style="width:5px;background:#4f46e5;flex-shrink:0"></div>
+        <div style="flex:${tgtDist || 1};background:linear-gradient(90deg,#86efac,#16a34a)"></div>
+      </div>
+      <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:12px;color:#6b7280;justify-content:center;align-items:center">
+        <span>Shares: <b style="color:#111">${p.shares || 0}</b></span>
+        <span>R:R: <b style="color:${rrColor}">${rr ? rr + ':1' : '—'}</b></span>
+        ${pnl != null ? `<span>P&L: <b style="color:${pnl >= 0 ? '#16a34a' : '#dc2626'}">${pnl >= 0 ? '+' : ''}${fmt$(pnl)}${pnlPct != null ? ' (' + (pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2) + '%)' : ''}</b></span>` : ''}
+        <span style="display:inline-flex;padding:2px 10px;border-radius:99px;font-size:11px;font-weight:700;
+          background:${p.status==='ACTIVE'?'#dcfce7':p.status==='PENDING'?'#fef3c7':'#f1f5f9'};
+          color:${p.status==='ACTIVE'?'#15803d':p.status==='PENDING'?'#92400e':'#64748b'}">${p.status}</span>
+        ${p.exit_date ? `<span>Closed: <b style="color:#111">${fmtDate(p.exit_date)}</b></span>` : ''}
+      </div>
+    </div>`;
+
+  // ── TradingView chart ──
+  const tvEl = document.getElementById('pd-tv-chart');
+  tvEl.innerHTML = '';
+  if (window.TradingView) {
+    const studies = _signalStudies(p.signal);
+    _pdTvWidget = new TradingView.widget({
+      container_id: 'pd-tv-chart',
+      symbol: p.symbol,
+      interval: 'D',
+      timezone: 'America/New_York',
+      theme: 'light',
+      style: '1',
+      locale: 'en',
+      toolbar_bg: '#f8fafc',
+      enable_publishing: false,
+      hide_side_toolbar: false,
+      allow_symbol_change: false,
+      save_image: false,
+      studies: studies,
+      width: '100%',
+      height: 440,
+    });
+  } else {
+    tvEl.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9ca3af;font-size:13px">Chart unavailable</div>`;
+  }
+
+  // ── Signal analysis ──
+  document.getElementById('pd-signals-body').innerHTML =
+    '<div class="text-center py-6 text-gray-400 text-sm">Loading analysis…</div>';
+  try {
+    const s = await api('/api/signals/' + p.symbol);
+    if (s.error) throw new Error(s.error);
+    const bsh = s.bsh || (s.buy_pct >= 60 ? 'BUY' : s.buy_pct <= 40 ? 'SELL' : 'HOLD');
+    const bshColor = bsh==='BUY' ? '#4ade80' : bsh==='SELL' ? '#f87171' : '#fbbf24';
+    const score = s.buy_pct || 50;
+    const barFill = bsh==='BUY' ? '#4ade80' : bsh==='SELL' ? '#f87171' : '#fbbf24';
+
+    document.getElementById('pd-signals-body').innerHTML = `
+      <!-- Why this play -->
+      <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:10px;padding:14px 16px;margin-bottom:16px">
+        <div style="font-size:11px;font-weight:700;color:#4338ca;text-transform:uppercase;letter-spacing:1px;margin-bottom:5px">Strategy Explanation</div>
+        <p style="font-size:13px;color:#3730a3;line-height:1.6">${_signalExplanation(p.signal, p.direction, entry, stop, tgt, s)}</p>
+      </div>
+      <!-- Current snapshot -->
+      <div class="grid grid-cols-3 gap-3 mb-4">
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+          <p class="text-xs text-gray-500">Price Now</p>
+          <p class="text-lg font-bold text-gray-900">${fmt$(s.price)}</p>
+        </div>
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+          <p class="text-xs text-gray-500">RSI(14)</p>
+          <p class="text-lg font-bold ${s.rsi < 30 ? 'pnl-pos' : s.rsi > 70 ? 'pnl-neg' : 'text-gray-900'}">${s.rsi?.toFixed(1) || '—'}</p>
+        </div>
+        <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-center">
+          <p class="text-xs text-gray-500 mb-1">BSH Now</p>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+            <span style="font-size:18px;font-weight:800;color:${bshColor}">${bsh}</span>
+            <div style="width:100%;height:6px;border-radius:99px;background:#e5e7eb;overflow:hidden">
+              <div style="height:100%;width:${score}%;background:${barFill};border-radius:99px"></div>
+            </div>
+            <span style="font-size:11px;color:#6b7280">${score}/100</span>
+          </div>
+        </div>
+      </div>
+      <!-- Indicator grid -->
+      <div class="grid grid-cols-2 gap-3 mb-4 text-xs text-gray-600">
+        <div>MA20: <span class="text-gray-900 font-mono">${fmt$(s.ma20)}</span></div>
+        <div>MA50: <span class="text-gray-900 font-mono">${fmt$(s.ma50)}</span></div>
+        ${s.ma200 ? `<div>MA200: <span class="text-gray-900 font-mono">${fmt$(s.ma200)}</span></div>` : ''}
+        <div>BB Upper: <span class="text-gray-900 font-mono">${fmt$(s.bb_upper)}</span></div>
+        <div>BB Lower: <span class="text-gray-900 font-mono">${fmt$(s.bb_lower)}</span></div>
+        <div>MACD Hist: <span class="${(s.macd_hist || 0) >= 0 ? 'pnl-pos' : 'pnl-neg'} font-mono">${s.macd_hist?.toFixed(4) || '—'}</span></div>
+        <div>Vol Ratio: <span class="text-gray-900 font-mono">${s.vol_ratio?.toFixed(2) || '—'}×</span></div>
+      </div>
+      <!-- Signal breakdown -->
+      <h4 class="text-sm font-medium text-gray-900 mb-2">Signal Breakdown</h4>
+      ${(s.signals || []).map(sig => {
+        const sc = sig.bias==='bullish' ? 'signal-bull' : sig.bias==='bearish' ? 'signal-bear' : 'signal-neutral';
+        const tc = sig.bias==='bullish' ? 'text-green-700' : sig.bias==='bearish' ? 'text-red-700' : 'text-gray-600';
+        return `<div class="signal-row ${sc}"><span class="text-sm text-gray-800">${sig.name}</span><span class="font-mono text-sm ${tc}">${sig.value}</span></div>`;
+      }).join('')}
+      <!-- News -->
+      <div id="pd-news-${p.symbol}" style="margin-top:20px">
+        <div id="pd-news-header-${p.symbol}" style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          <span class="text-xs font-semibold text-gray-500 uppercase tracking-wider">Latest News</span>
+          <span id="pd-news-loading-${p.symbol}" style="font-size:11px;color:#9ca3af">Loading…</span>
+        </div>
+        <div id="pd-news-body-${p.symbol}"></div>
+      </div>`;
+    _loadPlayNews(p.symbol);
+  } catch(e) {
+    document.getElementById('pd-signals-body').innerHTML =
+      `<div class="text-red-400 text-sm p-3">${e.message}</div>`;
+  }
+}
+
 function renderTradeBreakdown(plays) {
   const tbody = document.getElementById('plays-breakdown-body');
   if (!plays || !plays.length) {
@@ -2128,7 +2396,7 @@ function renderTradeBreakdown(plays) {
     const statusBg    = p.status === 'ACTIVE'  ? '#dcfce7' : p.status === 'PENDING' ? '#fef3c7' : '#f1f5f9';
     const statusColor = p.status === 'ACTIVE'  ? '#15803d' : p.status === 'PENDING' ? '#92400e' : '#64748b';
     const bg = i % 2 === 1 ? 'background:#f9fafb' : '';
-    return `<tr style="${bg}">
+    return `<tr style="${bg};cursor:pointer" onclick="openPlayDetail(${p.id})" title="Click to view chart & analysis">
       <td class="brok-td-left"><div class="brok-ticker">${p.symbol}</div></td>
       <td class="brok-td-left"><span style="color:${(p.direction||'LONG')==='LONG'?'#16a34a':'#dc2626'};font-weight:600;font-size:12px">${p.direction||'LONG'}</span></td>
       <td class="brok-td">${fmt$(entry)}</td>
@@ -2431,37 +2699,47 @@ const BOT_SLIDES = [
   {
     icon: '🔍',
     title: 'How the Bot Finds Trades',
-    body: 'Every morning at market open, the bot scans <strong>430 stocks</strong> across every sector and grades each one from 0–100. The score is based on five things: Trend (is it above its key moving averages?), Momentum (is it accelerating?), RSI (is it in the sweet spot — not overbought or oversold?), Volume (are a lot of people trading it today?), and Pattern (did something specific just trigger, like a MACD crossover or EMA bounce?). Only stocks that score <strong>65 or higher with at least one signal actively firing today</strong> get entered. Score alone isn\'t enough — something has to actually be happening right now.',
+    body: 'Every 5 minutes during market hours, the bot scans <strong>430 stocks</strong> across every sector and grades each one from 0–100. The score measures five things: Trend (above key moving averages?), Momentum (accelerating?), RSI (in the sweet spot?), Volume (unusual activity today?), and Pattern (MACD crossover, EMA bounce, etc.). A <strong>high score (≥ 65) with a signal firing = LONG entry</strong>. A <strong>low score (≤ 35) = SHORT entry</strong> — the same logic in reverse, betting the stock falls. Both directions run every scan, so the bot profits whether the market is going up or down.',
+  },
+  {
+    icon: '⭐',
+    title: 'Watchlist Priority — Pre-Screened Picks Go First',
+    body: 'Each night, the bot pre-screens all 430 stocks and saves the best to the Watchlist: top <strong>BUY candidates (score ≥ 55)</strong> and top <strong>SELL candidates (score ≤ 40)</strong>. The next day, Watchlist symbols get two advantages: (1) a <strong>relaxed threshold</strong> — BUY symbols qualify at ≥ 60 instead of ≥ 65; SELL symbols qualify at ≤ 40 instead of ≤ 35; and (2) <strong>front of the queue</strong> — if slots fill up, pre-screened picks always enter before cold discoveries. Longs are filled first, then remaining slots go to shorts.',
   },
   {
     icon: '📐',
     title: 'Position Sizing — Always Risk Exactly 5%',
-    body: 'Most beginners just throw money at a stock. This bot calculates it precisely. The rule is: <strong>risk 5% of the account per trade</strong> — that\'s $500 on a $10k account. It uses ATR (Average True Range — basically how much the stock moves on a typical day) to figure out where to place the stop, then works backwards to find the right number of shares. A volatile stock like TSLA might need a wider stop, so you\'d buy fewer shares. A steadier stock lets you buy more. Either way, the maximum you can lose on any single trade is $500.',
+    body: 'Every trade — long or short — risks the same amount: <strong>5% of the account, or $500 on a $10k account</strong>. The bot uses ATR (how much the stock typically moves in a day) to set the stop distance, then works backwards to figure out the right number of shares. A volatile stock needs a wider stop so you buy fewer shares. A steady stock allows more shares. Either way, if the trade goes wrong and the stop hits, you lose exactly $500 — no more. Position size is also capped at 15% of equity per trade so no single bet can dominate the account.',
   },
   {
     icon: '🎯',
-    title: 'The Bracket Order — 3 Orders Placed at Once',
-    body: 'When the bot enters a trade, it immediately places three orders at the same time: the <strong>buy</strong>, a <strong>stop loss</strong> (automatic sell if it drops too far), and a <strong>profit target</strong> (automatic sell when it hits the goal). Stop = 1.5× ATR below entry. Target = 3.75× ATR above entry, minimum +7%. That\'s roughly a 2.5-to-1 reward-to-risk ratio — for every $1 risked, the target pays $2.50. Alpaca executes all of this automatically. Once the bracket is placed, the bot doesn\'t need to watch the screen.',
+    title: 'The Bracket Order — 3 Orders at Once, Both Directions',
+    body: 'Every entry — long or short — places three orders simultaneously. <strong>For longs:</strong> buy entry + stop loss below (exit if wrong) + profit target above (exit when right). <strong>For shorts:</strong> sell-short entry + stop loss <em>above</em> (exit if price rallies against you) + profit target <em>below</em> (exit when price falls to goal). Both use ATR×1.5 for the stop and ATR×3.75 (minimum 7%) for the target — a ~2.5:1 reward-to-risk ratio. Alpaca manages all three legs automatically. Once the bracket is placed, the bot doesn\'t need to watch.',
   },
   {
     icon: '💰',
-    title: 'Scale-Out at +7% — Lock In the Win',
-    body: 'Here\'s where it gets smart. When any position gains <strong>+7%</strong>, the bot automatically sells <strong>90% of the shares</strong> immediately at market price — banking the majority of the profit right there. The remaining 10% is kept as a "runner" with a trailing stop, in case the stock keeps climbing. This way, you always lock in the bulk of a winning trade even if it later reverses. You never give back a big gain by being greedy.',
+    title: 'Scale-Out at 7% — Lock In the Win',
+    body: 'When any position — long or short — gains <strong>7%</strong>, the bot automatically closes <strong>90% of the shares</strong> at market price, locking in most of the profit immediately. The remaining 10% rides as a "runner" with a trailing stop in case the move continues. This means you never fully give back a big winner by being greedy — the bulk of the gain is banked the moment the target zone is reached, regardless of what happens next.',
   },
   {
     icon: '📈',
     title: 'Trailing Stop — Protect the Runner',
-    body: 'After the scale-out, and on all positions generally, the stop loss <strong>automatically moves up</strong> as the stock price rises. It always stays 1.5× ATR below wherever the price currently is. Critically, it can only go up — never back down. So if a stock climbs from $100 to $120, the stop climbs with it, locking in profit along the way. If the stock then drops back to $112, the stop triggers and you exit with a solid gain, not a loss.',
+    body: 'After the scale-out, the remaining position\'s stop <strong>moves automatically</strong> as price moves in your favor. For longs it trails up; for shorts it trails down. It always stays 1.5× ATR away and can only move in the profitable direction — never back. So if a long climbs from $100 to $120, the stop moves from $85 to $102, locking in profit. If it then reverses to $108, you exit with a solid gain. The runner either captures a big extended move or exits at a locked-in profit. It never turns a winner back into a loser.',
+  },
+  {
+    icon: '📉',
+    title: 'Shorting — Making Money When Stocks Fall',
+    body: 'Shorting means <strong>selling shares you don\'t own yet</strong>, then buying them back cheaper later — profiting from a price drop. When the bot shorts a stock, Alpaca lends the shares, the bot sells them at the current price, and the goal is to buy them back lower. The stop loss sits <em>above</em> the entry (if price rises, you lose), the profit target sits <em>below</em> (if price falls, you win). Risk is identical to a long: 5% of equity, ATR-based stop. The bot looks for scores ≤ 35 — stocks breaking down below moving averages, losing momentum, and showing weak volume — the mirror image of what it looks for going long.',
   },
   {
     icon: '🧮',
     title: 'Why a 43% Win Rate Is Still Profitable',
-    body: 'The bot wins less than half its trades — and that\'s completely fine. It\'s designed to <strong>win big and lose small</strong>. Average winning trade: <strong>+4.9%</strong>. Average losing trade: <strong>−2.8%</strong>. On 10 trades: 4 winners × $490 gained = $1,960. 6 losers × $280 lost = $1,680. Net profit: <strong>+$280</strong> over 10 trades, despite losing 6 of them. This is called asymmetric risk/reward and it\'s how professional traders think. You don\'t need to be right most of the time — you just need to make more when you\'re right than you lose when you\'re wrong.',
+    body: 'The bot wins less than half its trades — and that\'s fine. It\'s built to <strong>win big and lose small</strong>. Avg winner: <strong>+4.9%</strong>. Avg loser: <strong>−2.8%</strong>. On 10 trades: 4 wins × $490 = $1,960 gained. 6 losses × $280 = $1,680 lost. Net: <strong>+$280 profit despite losing 6 of 10</strong>. This applies to both longs and shorts — a short that hits its −7% target is just as profitable as a long that hits +7%. The math works in both directions. You don\'t need to be right most of the time. You just need your wins to be bigger than your losses.',
   },
   {
     icon: '🛡️',
     title: 'Built-In Safety Features',
-    body: 'The bot has several guardrails. <strong>Max 15 open positions</strong> — it never gets over-concentrated. A <strong>circuit breaker</strong> automatically stops new trades if losses in a single day or week get too large. It always tries to keep at least <strong>25% of the account deployed</strong> — if cash is sitting idle, it scans again immediately rather than doing nothing. After noon, if fewer than 2 trades were made that day, the score threshold drops slightly to 52 to make sure the money is always working.',
+    body: 'Several guardrails keep the bot from blowing up. <strong>Max 15 open positions total</strong> (longs + shorts combined) — never over-concentrated. <strong>No duplicate entries</strong> — if a bracket order is already pending for a symbol, the next scan skips it. <strong>15% equity cap per position</strong> — no single trade can consume more than $1,500 on a $10k account. <strong>PDT protection off</strong> — the account is configured so the pattern day trader rule only applies to exits, not entries, keeping swing trades unblocked. Longs are always filled before shorts when slots are limited.',
   },
 ];
 
@@ -2661,6 +2939,15 @@ function closeStartup() {
     }, 150);
   }
 }
+
+// ── Deploy timestamp ──────────────────────────────────────────────────
+(async function loadDeployTime() {
+  try {
+    const d = await api('/api/build_info');
+    const el = document.getElementById('deploy-label');
+    if (el && d.deployed_at) el.textContent = 'deployed ' + d.deployed_at;
+  } catch(e) {}
+})();
 
 // ── Plays Backtest ────────────────────────────────────────────────────
 let _pbtPolling = false;
