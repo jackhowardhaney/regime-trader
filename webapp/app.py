@@ -1123,6 +1123,43 @@ def _pos_size_from_blend(blend: float) -> Optional[float]:
     return None
 
 
+_DEFAULT_RATIO = {"scanner_pct": 0.60, "watchlist_pct": 0.40}
+
+
+@app.get("/api/blend-ratio")
+def get_blend_ratio():
+    """Return the current adaptive scanner/watchlist slot ratio."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key='blend_ratio'"
+        ).fetchone()
+    if row:
+        try:
+            return json.loads(row["value"])
+        except Exception:
+            pass
+    return _DEFAULT_RATIO
+
+
+@app.put("/api/blend-ratio")
+def set_blend_ratio(body: dict):
+    """Bot calls this after each scan to persist the updated ratio."""
+    scanner_pct  = max(0.25, min(0.75, float(body.get("scanner_pct",  0.60))))
+    watchlist_pct = round(1.0 - scanner_pct, 4)
+    payload = json.dumps({
+        "scanner_pct":  round(scanner_pct, 4),
+        "watchlist_pct": watchlist_pct,
+        "updated_at": datetime.utcnow().isoformat()[:16],
+        "reason": body.get("reason", ""),
+    })
+    with get_db() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO app_settings (key, value) VALUES ('blend_ratio', ?)",
+            (payload,),
+        )
+    return {"updated": True, "scanner_pct": scanner_pct, "watchlist_pct": watchlist_pct}
+
+
 @app.get("/api/blend-analysis")
 def blend_analysis():
     with get_db() as conn:
@@ -1182,13 +1219,23 @@ def blend_analysis():
 
     candidates.sort(key=lambda x: x["blend_score"], reverse=True)
 
+    # Current ratio
+    with get_db() as conn:
+        ratio_row = conn.execute(
+            "SELECT value FROM app_settings WHERE key='blend_ratio'"
+        ).fetchone()
+    current_ratio = json.loads(ratio_row["value"]) if ratio_row else _DEFAULT_RATIO
+
     return {
         "source_performance": src_perf,
         "candidates": candidates[:25],
+        "current_ratio": current_ratio,
         "formula": {
             "conviction_mult": "×1.25 for watchlist symbols (human monitoring = 25% score boost)",
             "bt_bonus": "Up to +15 pts: (profit_factor−1)×8 + (win_rate−50%)×20 — only if 90-day BT passed",
             "pos_sizing": "≥90→6.5% | ≥80→5.5% | ≥70→5.0% | ≥60→3.5% | <60→skip",
+            "scanner_entry": "Score ≥65, ATR×1.5 stop, ATR×3.75 target, 5% risk",
+            "watchlist_entry": "Blend ≥70, ATR×1.2 stop (tighter), ATR×3.0 target, 5.5% risk",
         },
     }
 

@@ -180,6 +180,14 @@ class AlpacaClient:
             for o in orders
         ]
 
+    def get_open_order_symbols(self) -> set:
+        """Return symbols that already have an open/pending buy order."""
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+        orders = self._trading_client.get_orders(filter=req)
+        return {o.symbol for o in orders}
+
     def get_available_margin(self) -> float:
         """Return available buying power (includes margin if enabled)."""
         acct = self._trading_client.get_account()
