@@ -66,6 +66,14 @@ RATIO_MAX   = 0.75
 
 WEBAPP_URL = os.getenv("WEBAPP_URL", "").rstrip("/")
 
+# Short selling — margin-aware, capped at 25% of equity notional
+MAX_SHORT_POSITIONS    = 4
+MAX_SHORT_EXPOSURE_PCT = 0.25   # total short notional ≤ 25% of equity
+SHORT_MIN_SCORE        = 60
+SHORT_ATR_STOP         = 1.5    # stop = entry + ATR×mult (above entry)
+SHORT_ATR_TARGET       = 3.0    # target = entry − ATR×mult (below entry)
+SHORT_RISK_PCT         = 0.04
+
 # Daily trading discipline — always active
 MIN_DAILY_ENTRIES = 2       # enter at least this many plays per trading day
 MIN_DEPLOYED_PCT  = 0.25    # keep at least 25% of equity in open positions at all times
@@ -613,8 +621,9 @@ class SwingTrader:
         """
         Score the full universe with adaptive two-logic blend (scanner + watchlist),
         rank by composite score, and submit bracket orders for qualifying setups.
+        Also scores bearish setups for short selling (capped at 25% exposure).
         """
-        from core.opportunity_scanner import score_symbol
+        from core.opportunity_scanner import score_symbol, score_symbol_short
 
         cb_status = (
             self._risk_manager.circuit_breaker.status
@@ -635,10 +644,27 @@ class SwingTrader:
             _update_blend_ratio(scanner_pct, watchlist_pct)
             return
 
-        # Adaptive ratio — split available slots between scanner and watchlist
+        # Tally existing short positions for exposure cap
+        all_alpaca_positions = []
+        try:
+            all_alpaca_positions = self._client.get_positions()
+        except Exception:
+            pass
+        existing_shorts = [p for p in all_alpaca_positions if p.get("side") == "short"]
+        n_existing_shorts = len(existing_shorts)
+        current_short_exp = sum(abs(float(p.get("market_value", 0))) for p in existing_shorts)
+
+        acct_fresh = self._with_retry(self._client.get_account)
+        equity = float(acct_fresh["equity"])
+        max_short_exposure = equity * MAX_SHORT_EXPOSURE_PCT
+        short_slots = max(0, MAX_SHORT_POSITIONS - n_existing_shorts)
+
+        # Adaptive ratio — split remaining long slots between scanner and watchlist
         scanner_pct, watchlist_pct = _fetch_blend_ratio()
-        slots_total = MAX_POSITIONS - n_open
-        scanner_slots   = max(1, round(slots_total * scanner_pct))
+        long_slots_total = MAX_POSITIONS - n_open - short_slots
+        long_slots_total = max(0, long_slots_total)
+        slots_total = long_slots_total
+        scanner_slots   = max(1, round(slots_total * scanner_pct)) if slots_total > 0 else 0
         watchlist_slots = max(0, slots_total - scanner_slots)
         if slots_total == 1:
             scanner_slots   = 1 if scanner_pct >= watchlist_pct else 0
@@ -656,8 +682,9 @@ class SwingTrader:
             scanner_pct * 100, watchlist_pct * 100, threshold,
         )
 
-        # ── SCANNER LOGIC ─────────────────────────────────────────────────────
+        # ── SCANNER LOGIC (long + short in one pass) ──────────────────────────
         scored: List[dict] = []
+        scored_short: List[dict] = []
         for sym, bars in self._bar_history.items():
             if len(bars) < 50:
                 continue
@@ -665,6 +692,9 @@ class SwingTrader:
                 result = score_symbol(bars, sym)
                 if result:
                     scored.append(result)
+                rs = score_symbol_short(bars, sym)
+                if rs:
+                    scored_short.append(rs)
             except Exception as exc:
                 logger.debug("score_symbol failed for %s: %s", sym, exc)
 
@@ -682,7 +712,7 @@ class SwingTrader:
         for cand in scanner_candidates:
             if scanner_entered >= scanner_slots:
                 break
-            if self._enter_play(cand, equity, source="scanner"):
+            if self._enter_play(cand, equity, source="scanner", direction="LONG"):
                 scanner_entered += 1
                 open_positions.add(cand["symbol"])
 
@@ -735,9 +765,106 @@ class SwingTrader:
             except Exception as exc:
                 logger.warning("Watchlist scan failed: %s", exc)
 
+        # ── SHORTS ────────────────────────────────────────────────────────────
+        short_entered = 0
+        if short_slots > 0 and current_short_exp < max_short_exposure:
+            # Merge scanner shorts + watchlist SELL picks
+            short_candidates: List[dict] = [
+                r for r in scored_short
+                if r.get("short_score", 0) >= SHORT_MIN_SCORE
+                and r["symbol"] not in open_positions
+                and r["symbol"] not in {p.get("symbol") for p in existing_shorts}
+            ]
+            # Watchlist SELL picks get +10% conviction bonus
+            try:
+                wl_sell_data = _api_get("/api/blend-analysis")
+                wl_sells = [
+                    c["symbol"] for c in wl_sell_data.get("candidates", [])
+                    if c.get("bsh") == "SELL"
+                ]
+                for sc in short_candidates:
+                    if sc["symbol"] in wl_sells:
+                        sc["short_score"] = min(100.0, sc["short_score"] * 1.10)
+            except Exception:
+                pass
+            # Also add watchlist SELL picks not already in scored_short
+            scored_short_syms = {r["symbol"] for r in scored_short}
+            try:
+                end_str   = datetime.now().strftime("%Y-%m-%d")
+                start_str = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+                for wl_sym in (wl_sells if 'wl_sells' in dir() else []):
+                    if wl_sym in scored_short_syms or wl_sym in open_positions:
+                        continue
+                    if wl_sym not in self._bar_history and self._fetcher:
+                        try:
+                            df = self._fetcher.get_historical_bars(
+                                wl_sym, self._timeframe, start_str, end_str
+                            )
+                            if df is not None and not df.empty:
+                                self._bar_history[wl_sym] = df
+                        except Exception:
+                            continue
+                    wl_bars = self._bar_history.get(wl_sym)
+                    if wl_bars is None or len(wl_bars) < 50:
+                        continue
+                    rs = score_symbol_short(wl_bars, wl_sym)
+                    if rs and rs.get("short_score", 0) >= SHORT_MIN_SCORE:
+                        rs["short_score"] = min(100.0, rs["short_score"] * 1.10)
+                        short_candidates.append(rs)
+            except Exception as exc:
+                logger.debug("Watchlist SELL short scoring failed: %s", exc)
+
+            short_candidates.sort(key=lambda x: x.get("short_score", 0), reverse=True)
+            short_exp_ref = [current_short_exp]
+
+            for sc in short_candidates:
+                if short_entered >= short_slots:
+                    break
+                if short_exp_ref[0] >= max_short_exposure:
+                    break
+                sym = sc["symbol"]
+                bars = self._bar_history.get(sym)
+                if bars is None or len(bars) < ATR_PERIOD + 2:
+                    continue
+                atr = _compute_atr(bars)
+                if atr <= 0:
+                    continue
+                price = float(bars["close"].iloc[-1])
+                risk_per_share = atr * SHORT_ATR_STOP
+                shares_by_risk = int((equity * SHORT_RISK_PCT) / risk_per_share)
+                remaining_budget = max_short_exposure - short_exp_ref[0]
+                shares_by_budget = int(remaining_budget / price) if price > 0 else 0
+                shares = min(shares_by_risk, shares_by_budget)
+                if shares < 1:
+                    continue
+                # Margin check: short requires 50% margin, keep within 90% of buying power
+                bp = float(acct_fresh.get("buying_power", equity))
+                cost = price * shares
+                if cost * 0.50 > bp * 0.90:
+                    logger.debug("Short %s margin check failed (cost=%.0f bp=%.0f) — skipping", sym, cost, bp)
+                    continue
+                short_cand = {
+                    "symbol": sym,
+                    "score": int(sc.get("short_score", 0)),
+                    "short_score": sc.get("short_score", 0),
+                    "firing_signals": sc.get("firing_signals", ["short_scan"]),
+                }
+                if self._enter_play(
+                    short_cand, equity,
+                    atr_stop_mult=SHORT_ATR_STOP,
+                    atr_target_mult=SHORT_ATR_TARGET,
+                    risk_pct=SHORT_RISK_PCT,
+                    source="scanner",
+                    direction="SHORT",
+                ):
+                    short_entered += 1
+                    short_exp_ref[0] += cost
+                    open_positions.add(sym)
+
         logger.info(
-            "Scan done: entered %d (scanner=%d, watchlist=%d)",
-            scanner_entered + watchlist_entered, scanner_entered, watchlist_entered,
+            "Scan done: entered %d (scanner=%d, watchlist=%d, short=%d)",
+            scanner_entered + watchlist_entered + short_entered,
+            scanner_entered, watchlist_entered, short_entered,
         )
 
         # ── UPDATE ADAPTIVE RATIO ─────────────────────────────────────────────
@@ -749,6 +876,7 @@ class SwingTrader:
         atr_target_mult: float = ATR_TARGET_MULT,
         risk_pct: float = RISK_PER_TRADE,
         source: str = "scanner",
+        direction: str = "LONG",
     ) -> bool:
         """Submit a bracket order for a qualifying swing setup. Returns True on success."""
         sym = candidate["symbol"]
@@ -762,9 +890,17 @@ class SwingTrader:
         if atr <= 0:
             return False
 
-        stop = round(price - atr * atr_stop_mult, 2)
-        target = max(round(price + atr * atr_target_mult, 2), round(price * 1.07, 2))
-        risk_per_share = price - stop
+        if direction == "SHORT":
+            stop = round(price + atr * atr_stop_mult, 2)
+            target = round(price - atr * atr_target_mult, 2)
+            if target <= 0:
+                return False
+            risk_per_share = stop - price
+        else:
+            stop = round(price - atr * atr_stop_mult, 2)
+            target = max(round(price + atr * atr_target_mult, 2), round(price * 1.07, 2))
+            risk_per_share = price - stop
+
         if risk_per_share <= 0:
             return False
 
@@ -774,19 +910,20 @@ class SwingTrader:
             return False
 
         signals = candidate.get("firing_signals", [])
-        score = candidate.get("score", 0)
+        score = candidate.get("score", candidate.get("short_score", 0))
         strategy = signals[0] if signals else "composite"
 
         log_entry = {
             "ts": datetime.utcnow().isoformat(), "symbol": sym, "score": score,
             "signals": signals, "entry": price, "stop": stop, "target": target,
             "shares": shares, "atr": round(atr, 4), "source": source,
+            "direction": direction,
         }
 
         if self.dry_run:
             logger.info(
-                "[DRY-RUN] %s  %s: score=%d  %dsh @ $%.2f  stop=$%.2f  target=$%.2f",
-                source.upper(), sym, score, shares, price, stop, target,
+                "[DRY-RUN] %s %s  %s: score=%d  %dsh @ $%.2f  stop=$%.2f  target=$%.2f",
+                direction, source.upper(), sym, score, shares, price, stop, target,
             )
             self._recent_entries = (self._recent_entries + [log_entry])[-20:]
             return True
@@ -794,12 +931,12 @@ class SwingTrader:
         try:
             from core.regime_strategies import Signal
             signal = Signal(
-                symbol=sym, direction="LONG", confidence=score / 100.0,
+                symbol=sym, direction=direction, confidence=score / 100.0,
                 entry_price=price, stop_loss=stop, take_profit=target,
                 position_size_pct=shares * price / equity, leverage=1.0,
                 regime_id=0, regime_name="SWING", regime_probability=1.0,
                 timestamp=datetime.utcnow(),
-                reasoning=f"{source} score={score} signals={signals}",
+                reasoning=f"{source} {direction} score={score} signals={signals}",
                 strategy_name=strategy,
             )
             record = self._order_executor.submit_bracket_order(signal)
@@ -808,18 +945,18 @@ class SwingTrader:
             self._position_tracker.set_stop(sym, stop)
             self._recent_entries = (self._recent_entries + [log_entry])[-20:]
             self._daily_entries += 1
+            rr = abs(target - price) / risk_per_share if risk_per_share > 0 else 0
             _record_to_dashboard(
-                sym, "LONG", price, stop, target, shares, strategy,
-                f"{source} score={score} signals={','.join(signals)}", source,
+                sym, direction, price, stop, target, shares, strategy,
+                f"{source} {direction} score={score} signals={','.join(signals)}", source,
             )
             logger.info(
-                "[%s] Entered %s: score=%d  %dsh @ $%.2f  stop=$%.2f  target=$%.2f  R:R=%.1f:1",
-                source.upper(), sym, score, shares, price, stop, target,
-                (target - price) / (price - stop),
+                "[%s %s] %s: score=%d  %dsh @ $%.2f  stop=$%.2f  target=$%.2f  R:R=%.1f:1",
+                direction, source.upper(), sym, score, shares, price, stop, target, rr,
             )
             return True
         except Exception as exc:
-            logger.error("Failed to enter %s: %s", sym, exc)
+            logger.error("Failed to enter %s %s: %s", direction, sym, exc)
             return False
 
     # ------------------------------------------------------------------

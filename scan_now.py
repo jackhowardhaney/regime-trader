@@ -26,31 +26,40 @@ logging.basicConfig(level=logging.WARNING)
 
 from broker.alpaca_client import AlpacaClient
 from broker.order_executor import OrderExecutor
-from core.opportunity_scanner import score_symbol
+from core.opportunity_scanner import score_symbol, score_symbol_short
 from core.regime_strategies import Signal
 from data.market_data import MarketDataFetcher
 
 # ── Parameters ────────────────────────────────────────────────────────────────
 
-# Scanner logic
+# Scanner long logic
 SCANNER_MIN_SCORE    = 65
 SCANNER_ATR_STOP     = 1.5
 SCANNER_ATR_TARGET   = 3.75
-SCANNER_RISK_PCT     = 0.05      # 5% of equity risked per scanner play
+SCANNER_RISK_PCT     = 0.05
 
-# Watchlist logic — tighter stops because conviction earns less room to breathe
-WATCHLIST_MIN_BLEND  = 70        # blend_score = scanner×1.25 + BT_bonus
-WATCHLIST_ATR_STOP   = 1.2       # tighter stop (higher conviction = more precise)
-WATCHLIST_ATR_TARGET = 3.0       # adjusted to preserve 2.5:1 R:R
-WATCHLIST_RISK_PCT   = 0.055     # 5.5% per watchlist play (conviction premium)
+# Watchlist long logic — tighter stops (conviction = precision)
+WATCHLIST_MIN_BLEND  = 70
+WATCHLIST_ATR_STOP   = 1.2
+WATCHLIST_ATR_TARGET = 3.0
+WATCHLIST_RISK_PCT   = 0.055
 
-MAX_POSITION_PCT     = 0.15      # never spend > 15% of equity on one position
+# Short logic — inverted stops, margin-aware
+# stop = entry + ATR×1.5 (above entry), target = entry - ATR×3.0 (below)
+SHORT_MIN_SCORE        = 60
+SHORT_ATR_STOP         = 1.5
+SHORT_ATR_TARGET       = 3.0
+SHORT_RISK_PCT         = 0.04    # 4% risk per short (slightly tighter than longs)
+MAX_SHORT_POSITIONS    = 4       # 3-5 short positions
+MAX_SHORT_EXPOSURE_PCT = 0.25    # total short notional ≤ 25% of equity
+
+MAX_POSITION_PCT     = 0.15
 ATR_PERIOD           = 14
 MAX_POSITIONS        = 15
-MIN_TRADES_TO_ADJUST = 4         # need this many closed plays per source before shifting ratio
-RATIO_STEP           = 0.05      # shift ratio by this amount per scan run
-RATIO_MIN            = 0.25      # floor — never below 25% for either side
-RATIO_MAX            = 0.75      # ceiling
+MIN_TRADES_TO_ADJUST = 4
+RATIO_STEP           = 0.05
+RATIO_MIN            = 0.25
+RATIO_MAX            = 0.75
 
 WEBAPP_URL = os.getenv("WEBAPP_URL", "").rstrip("/")
 
@@ -348,6 +357,81 @@ def _enter_watchlist_play(wl_candidate, executor, client, equity, buying_power_r
         return False
 
 
+def _enter_short_play(candidate, executor, client, equity, buying_power_ref, excluded,
+                       short_exposure_ref, max_short_exposure):
+    """
+    Short entry: stop ABOVE entry, target BELOW entry.
+    Total short notional capped at MAX_SHORT_EXPOSURE_PCT of equity.
+    Margin check: shorting requires ~50% collateral (Reg T).
+    """
+    sym   = candidate["symbol"]
+    bars  = candidate["_bars"]
+    price = float(bars["close"].iloc[-1])
+    a     = _atr(bars)
+    if a <= 0:
+        return False
+
+    stop   = round(price + a * SHORT_ATR_STOP, 2)    # ABOVE entry (buy-to-cover at loss)
+    target = round(price - a * SHORT_ATR_TARGET, 2)  # BELOW entry (buy-to-cover at profit)
+    if target <= 0:
+        return False
+
+    rps = stop - price    # risk per share (always positive for shorts)
+    if rps <= 0:
+        return False
+
+    shares = int((equity * SHORT_RISK_PCT) / rps)
+    cost   = shares * price   # notional short exposure
+
+    # Cap to stay within 25% of equity total short book
+    remaining = max_short_exposure - short_exposure_ref[0]
+    if cost > remaining:
+        shares = max(0, int(remaining / price))
+        cost   = shares * price
+    if shares < 1:
+        print(f"  {sym} [SHORT]: exposure cap reached — skip")
+        return False
+
+    # Margin check (Reg T: need ~50% of notional as collateral)
+    try:
+        bp = float(client.get_account()["buying_power"])
+        buying_power_ref[0] = bp
+    except Exception:
+        bp = buying_power_ref[0]
+    if cost * 0.50 > bp * 0.90:
+        print(f"  {sym} [SHORT]: insufficient margin — skip")
+        return False
+
+    score   = candidate.get("short_score", 0)
+    signals = candidate.get("firing_signals", [])
+    source  = candidate.get("source", "scanner")
+
+    try:
+        sig = Signal(
+            symbol=sym, direction="SHORT", confidence=min(1.0, score / 100.0),
+            entry_price=price, stop_loss=stop, take_profit=target,
+            position_size_pct=cost / equity, leverage=1.0,
+            regime_id=0, regime_name="SWING", regime_probability=1.0,
+            timestamp=datetime.utcnow(),
+            reasoning=f"{source} short_score={score:.0f} signals={','.join(signals)}",
+            strategy_name=signals[0] if signals else "short_composite",
+        )
+        executor.submit_bracket_order(sig)
+        _record_play(sym, "SHORT", price, stop, target, shares,
+                     signals[0] if signals else "short_composite",
+                     f"{source} short_score={score:.0f} stop=ATR×{SHORT_ATR_STOP}",
+                     source)
+        short_exposure_ref[0] += cost
+        rr = round((price - target) / (stop - price), 2)
+        print(f"  ✓ SHORT  [{source}] {sym:<8} score={score:.0f}  {shares}sh @ ${price:.2f}"
+              f"  stop=${stop:.2f}  target=${target:.2f}  R:R={rr}:1")
+        excluded.add(sym)
+        return True
+    except Exception as e:
+        print(f"  ✗ SHORT  {sym}: {e}")
+        return False
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -386,45 +470,58 @@ def main():
     buying_power = float(acct["buying_power"])
     bp_ref       = [buying_power]   # mutable ref passed into entry functions
 
-    held    = {p["symbol"] for p in client.get_positions()}
+    all_positions = client.get_positions()
+    held    = {p["symbol"] for p in all_positions}
     pending = client.get_open_order_symbols()
     excluded = held | pending
     slots   = MAX_POSITIONS - len(held)
 
-    # ── Fetch adaptive ratio ──────────────────────────────────────────
+    # ── Short book state ─────────────────────────────────────────────
+    short_positions = [p for p in all_positions if p.get("side") == "short"]
+    n_existing_shorts   = len(short_positions)
+    current_short_exp   = sum(abs(float(p.get("market_value", 0))) for p in short_positions)
+    max_short_exposure  = equity * MAX_SHORT_EXPOSURE_PCT
+    short_exposure_ref  = [current_short_exp]
+    short_slots         = max(0, MAX_SHORT_POSITIONS - n_existing_shorts)
+
+    # ── Fetch adaptive ratio for long slots ──────────────────────────
     scanner_pct, watchlist_pct = _fetch_ratio()
-    scanner_slots  = max(1, round(slots * scanner_pct))
-    watchlist_slots = max(1, slots - scanner_slots)
-    # Guard: if only 1 slot left, give it to whichever source has higher pct
-    if slots == 1:
-        scanner_slots  = 1 if scanner_pct >= watchlist_pct else 0
+    long_slots      = max(0, slots - short_slots)
+    scanner_slots   = max(1, round(long_slots * scanner_pct)) if long_slots > 0 else 0
+    watchlist_slots = max(0, long_slots - scanner_slots)
+    if long_slots == 1:
+        scanner_slots   = 1 if scanner_pct >= watchlist_pct else 0
         watchlist_slots = 1 - scanner_slots
 
-    print(f"\n{'='*58}")
+    print(f"\n{'='*62}")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M ET')}  |  Adaptive Blend Scanner")
     print(f"  Equity: ${equity:,.2f}  |  Buying power: ${buying_power:,.2f}")
-    print(f"  Slots: {slots} total  →  scanner={scanner_slots}  watchlist={watchlist_slots}")
-    print(f"  Ratio:  scanner {scanner_pct:.0%}  /  watchlist {watchlist_pct:.0%}")
-    print(f"{'='*58}\n")
+    print(f"  Slots: {slots} total  →  long={long_slots} (scanner={scanner_slots}, watchlist={watchlist_slots})  short={short_slots}")
+    print(f"  Long ratio:  scanner {scanner_pct:.0%}  /  watchlist {watchlist_pct:.0%}")
+    print(f"  Short book:  {n_existing_shorts}/{MAX_SHORT_POSITIONS} positions  "
+          f"${current_short_exp:,.0f}/${max_short_exposure:,.0f} ({current_short_exp/equity*100:.1f}%/25%)")
+    print(f"{'='*62}\n")
 
-    if slots <= 0:
+    if slots <= 0 and short_slots <= 0:
         print("Max positions reached — running ratio update and exiting.")
         _update_ratio(scanner_pct, watchlist_pct)
         return
 
-    fetcher = MarketDataFetcher(client)
-    end   = datetime.now().strftime("%Y-%m-%d")
-    start = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
+    fetcher  = MarketDataFetcher(client)
+    end      = datetime.now().strftime("%Y-%m-%d")
+    start    = (datetime.now() - timedelta(days=120)).strftime("%Y-%m-%d")
     executor = OrderExecutor(client)
 
     # ══════════════════════════════════════════════════════════════════
-    # SCANNER LOGIC — broad universe, score ≥ 65
+    # SCANNER — one pass scores longs AND shorts (no double-fetch)
     # ══════════════════════════════════════════════════════════════════
-    scanner_entered = 0
-    if scanner_slots > 0:
-        print(f"── SCANNER ({scanner_slots} slots, score ≥ {SCANNER_MIN_SCORE}) ──────────────────────")
-        print(f"   Scanning {len(SCAN_UNIVERSE)} symbols…")
-        scored = []
+    scanner_entered     = 0
+    scored_long         = []
+    scored_short_scan   = []   # short candidates found in scanner pass
+
+    need_scanner = scanner_slots > 0 or (short_slots > 0 and current_short_exp < max_short_exposure)
+    if need_scanner:
+        print(f"── SCANNER PASS ({len(SCAN_UNIVERSE)} symbols — scoring long + short) ───────")
         for sym in SCAN_UNIVERSE:
             if sym in excluded:
                 continue
@@ -432,31 +529,40 @@ def main():
                 df = fetcher.get_historical_bars(sym, "1Day", start, end)
                 if df is None or len(df) < 50:
                     continue
+                # Long scoring
                 r = score_symbol(df, sym)
                 if r:
                     r["_bars"] = df
-                    scored.append(r)
+                    scored_long.append(r)
+                # Short scoring (same bars — no extra API call)
+                rs = score_symbol_short(df, sym)
+                if rs:
+                    rs["_bars"]  = df
+                    rs["source"] = "scanner"
+                    scored_short_scan.append(rs)
             except Exception:
                 pass
 
-        scored.sort(key=lambda x: x.get("score", 0), reverse=True)
-        long_cands = [
-            r for r in scored
-            if r.get("score", 0) >= SCANNER_MIN_SCORE and r.get("firing_signals")
-        ]
-        print(f"   {len(long_cands)} qualify. Entering up to {scanner_slots}:\n")
-        for cand in long_cands:
-            if scanner_entered >= scanner_slots:
-                break
-            if _enter_scanner_play(cand, executor, client, equity, bp_ref, excluded):
-                scanner_entered += 1
+        # ── Long entries from scanner ─────────────────────────────────
+        if scanner_slots > 0:
+            scored_long.sort(key=lambda x: x.get("score", 0), reverse=True)
+            long_cands = [
+                r for r in scored_long
+                if r.get("score", 0) >= SCANNER_MIN_SCORE and r.get("firing_signals")
+            ]
+            print(f"   {len(long_cands)} long candidates (score ≥ {SCANNER_MIN_SCORE}). Entering up to {scanner_slots}:\n")
+            for cand in long_cands:
+                if scanner_entered >= scanner_slots:
+                    break
+                if _enter_scanner_play(cand, executor, client, equity, bp_ref, excluded):
+                    scanner_entered += 1
 
     # ══════════════════════════════════════════════════════════════════
-    # WATCHLIST LOGIC — curated symbols, blend ≥ 70, tighter stops
+    # WATCHLIST — curated long picks (blend ≥ 70)
     # ══════════════════════════════════════════════════════════════════
     watchlist_entered = 0
     if watchlist_slots > 0:
-        print(f"\n── WATCHLIST ({watchlist_slots} slots, blend ≥ {WATCHLIST_MIN_BLEND}) ──────────────────")
+        print(f"\n── WATCHLIST LONG ({watchlist_slots} slots, blend ≥ {WATCHLIST_MIN_BLEND}) ───────────────")
         try:
             blend_data = _api_get("/api/blend-analysis")
             wl_candidates = [
@@ -465,7 +571,7 @@ def main():
                 and c.get("bsh") == "BUY"
                 and c["symbol"] not in excluded
             ]
-            print(f"   {len(wl_candidates)} watchlist candidates (blend ≥ {WATCHLIST_MIN_BLEND}):\n")
+            print(f"   {len(wl_candidates)} watchlist candidates:\n")
             for c in wl_candidates:
                 print(f"     {c['symbol']:<8} blend={c['blend_score']:.0f}  scanner={c['scanner_score']}  bsh={c['bsh']}")
             print()
@@ -478,17 +584,70 @@ def main():
             print(f"   Watchlist scan failed: {e}")
 
     # ══════════════════════════════════════════════════════════════════
+    # SHORTS — scanner low-scorers + watchlist SELL picks
+    # ══════════════════════════════════════════════════════════════════
+    shorts_entered = 0
+    if short_slots > 0 and current_short_exp < max_short_exposure:
+        print(f"\n── SHORTS ({short_slots} slots, score ≥ {SHORT_MIN_SCORE}, "
+              f"25% cap=${max_short_exposure:,.0f}) ────────────────────")
+
+        # Merge scanner short candidates with watchlist SELL picks
+        short_candidates = [r for r in scored_short_scan
+                            if r.get("short_score", 0) >= SHORT_MIN_SCORE and r["symbol"] not in excluded]
+
+        try:
+            blend_data = _api_get("/api/blend-analysis") if not watchlist_slots else blend_data
+            for c in blend_data.get("candidates", []):
+                if c.get("bsh") != "SELL" or c["symbol"] in excluded:
+                    continue
+                sym = c["symbol"]
+                # Fetch bars for watchlist SELL picks (not in scanner universe)
+                try:
+                    df = fetcher.get_historical_bars(sym, "1Day", start, end)
+                    if df is None or len(df) < 50:
+                        continue
+                    rs = score_symbol_short(df, sym)
+                    if rs and rs["short_score"] >= SHORT_MIN_SCORE:
+                        rs["_bars"]        = df
+                        rs["source"]       = "watchlist"
+                        rs["short_score"] *= 1.10    # +10% watchlist conviction bonus
+                        short_candidates.append(rs)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Deduplicate + rank by short_score
+        seen: set = set()
+        ranked: list = []
+        for r in sorted(short_candidates, key=lambda x: x["short_score"], reverse=True):
+            if r["symbol"] not in seen:
+                seen.add(r["symbol"])
+                ranked.append(r)
+
+        print(f"   {len(ranked)} short candidates. Entering up to {short_slots}:\n")
+        for cand in ranked:
+            if shorts_entered >= short_slots:
+                break
+            if short_exposure_ref[0] >= max_short_exposure:
+                break
+            if _enter_short_play(cand, executor, client, equity, bp_ref, excluded,
+                                  short_exposure_ref, max_short_exposure):
+                shorts_entered += 1
+
+    # ══════════════════════════════════════════════════════════════════
     # Update adaptive ratio based on live performance
     # ══════════════════════════════════════════════════════════════════
-    print(f"\n── RATIO UPDATE ─────────────────────────────────────────────")
+    print(f"\n── RATIO UPDATE ──────────────────────────────────────────────")
     _update_ratio(scanner_pct, watchlist_pct)
 
-    total = scanner_entered + watchlist_entered
-    print(f"\n{'='*58}")
+    total = scanner_entered + watchlist_entered + shorts_entered
+    print(f"\n{'='*62}")
     print(f"  Done. Entered {total} plays  "
-          f"(scanner={scanner_entered}, watchlist={watchlist_entered})")
+          f"(scanner long={scanner_entered}, watchlist long={watchlist_entered}, short={shorts_entered})")
+    print(f"  Short book: ${short_exposure_ref[0]:,.0f} / ${max_short_exposure:,.0f} ({short_exposure_ref[0]/equity*100:.1f}%/25%)")
     print(f"  Remaining buying power: ${bp_ref[0]:,.2f}")
-    print(f"{'='*58}\n")
+    print(f"{'='*62}\n")
 
 
 if __name__ == "__main__":

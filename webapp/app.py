@@ -308,16 +308,17 @@ def _sync_alpaca_plays():
                         if sym not in tracked_syms:
                             avg_entry = float(pos.get("avg_entry_price") or 0)
                             qty = float(pos.get("qty") or 0)
+                            direction = "SHORT" if pos.get("side") == "short" else "LONG"
                             if avg_entry > 0 and qty > 0:
                                 conn.execute(
                                     """INSERT INTO plays
                                        (symbol, direction, status, entry_price, shares,
                                         entry_date, signal, notes, source)
                                        VALUES (?,?,?,?,?,?,?,?,?)""",
-                                    (sym, "LONG", "ACTIVE", avg_entry, qty,
+                                    (sym, direction, "ACTIVE", avg_entry, qty,
                                      datetime.utcnow().isoformat()[:10],
                                      "auto-sync",
-                                     "Auto-discovered from Alpaca position sync",
+                                     f"Auto-discovered from Alpaca position sync ({direction})",
                                      "scanner"),
                                 )
 

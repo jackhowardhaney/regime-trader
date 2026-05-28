@@ -146,7 +146,7 @@ class AlpacaClient:
             {
                 "symbol": p.symbol,
                 "qty": float(p.qty),
-                "side": str(p.side),
+                "side": p.side.value,
                 "avg_entry_price": float(p.avg_entry_price),
                 "current_price": float(p.current_price),
                 "market_value": float(p.market_value),

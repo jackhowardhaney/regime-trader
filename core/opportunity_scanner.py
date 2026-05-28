@@ -213,6 +213,182 @@ def score_symbol(df: pd.DataFrame, symbol: str) -> Optional[Dict]:
     }
 
 
+SIGNAL_META_SHORT: Dict[str, Dict] = {
+    "momentum_breakdown": {
+        "label": "Momentum Breakdown",
+        "desc": "Price broke 20-day low on volume ≥1.5× average",
+        "hex": "#f87171",
+    },
+    "macd_cross_bearish": {
+        "label": "MACD Cross Bearish",
+        "desc": "MACD crossed below signal line (last 3 bars)",
+        "hex": "#fb7185",
+    },
+    "death_cross": {
+        "label": "Death Cross",
+        "desc": "50 SMA crossed below 200 SMA within last 10 bars",
+        "hex": "#f43f5e",
+    },
+    "rsi_overbought_reset": {
+        "label": "RSI Overbought Reset",
+        "desc": "RSI was above 70, now falling below 65",
+        "hex": "#e879f9",
+    },
+    "bb_breakdown": {
+        "label": "BB Breakdown",
+        "desc": "Price below lower Bollinger Band with expanding width",
+        "hex": "#a78bfa",
+    },
+}
+
+
+def score_symbol_short(df: pd.DataFrame, symbol: str) -> Optional[Dict]:
+    """
+    Score bearish (short-side) setups. Returns a dict with short_score (0-100)
+    and firing_signals. A high short_score means the stock looks like a strong
+    short candidate — structurally weak, momentum rolling over.
+
+    Avoids oversold stocks (RSI < 35) — they have limited downside from here.
+    """
+    if df is None or len(df) < 50:
+        return None
+
+    close  = df["close"].astype(float)
+    high   = df["high"].astype(float)
+    low    = df["low"].astype(float)
+    volume = df["volume"].astype(float)
+    n      = len(close)
+    price  = float(close.iloc[-1])
+
+    # RSI
+    delta = close.diff()
+    gain  = delta.clip(lower=0).ewm(com=13, adjust=False).mean()
+    loss  = (-delta.clip(upper=0)).ewm(com=13, adjust=False).mean()
+    rsi_s = 100.0 - 100.0 / (1.0 + gain / (loss + 1e-10))
+    rsi   = float(rsi_s.iloc[-1])
+
+    # Bail early: oversold stocks have limited downside
+    if rsi < 35:
+        return None
+
+    # MACD
+    ema12    = close.ewm(span=12, adjust=False).mean()
+    ema26    = close.ewm(span=26, adjust=False).mean()
+    macd     = ema12 - ema26
+    macd_sig = macd.ewm(span=9, adjust=False).mean()
+    hist     = macd - macd_sig
+
+    # MAs
+    ema21  = close.ewm(span=21, adjust=False).mean()
+    ema50  = close.ewm(span=50, adjust=False).mean()
+    sma50  = close.rolling(50).mean()
+    sma200 = close.rolling(200).mean() if n >= 200 else None
+
+    # Volume / Bollinger
+    vol20         = float(volume.rolling(20).mean().iloc[-1])
+    vol_ratio     = float(volume.iloc[-1]) / (vol20 + 1e-10)
+    bb_std        = close.rolling(20).std()
+    bb_lower      = close.rolling(20).mean() - 2.0 * bb_std
+    bb_width_now  = float((4.0 * bb_std).iloc[-1])
+    bb_width_avg  = float((4.0 * bb_std).iloc[-6:-1].mean()) if n >= 6 else bb_width_now
+    low20         = float(low.shift(1).rolling(20).min().iloc[-1]) if n > 21 else float(low.min())
+    roc10         = float((price / float(close.iloc[-11]) - 1) * 100) if n >= 11 else 0.0
+    is_down_day   = float(close.iloc[-1]) < float(close.iloc[-2]) if n >= 2 else True
+
+    # ── Signal detection ───────────────────────────────────────────────
+    signals: List[str] = []
+
+    if price < low20 and vol_ratio >= 1.5:
+        signals.append("momentum_breakdown")
+
+    for i in range(1, min(4, n)):
+        if float(hist.iloc[-i]) < 0 and float(hist.iloc[-i - 1]) >= 0:
+            signals.append("macd_cross_bearish")
+            break
+
+    if sma200 is not None and n >= 205:
+        s50  = sma50.values
+        s200 = sma200.values
+        for i in range(1, min(11, n - 200)):
+            if s50[-i] < s200[-i] and s50[-i - 1] >= s200[-i - 1]:
+                signals.append("death_cross")
+                break
+
+    if n >= 10 and float(rsi_s.iloc[-10:-1].max()) > 70 and rsi < 65:
+        signals.append("rsi_overbought_reset")
+
+    if price < float(bb_lower.iloc[-1]) and bb_width_now > bb_width_avg * 1.15:
+        signals.append("bb_breakdown")
+
+    # Require at least one signal to be a viable short
+    if not signals:
+        return None
+
+    # ── Composite short score (0-100) ─────────────────────────────────
+    below_ema21  = price < float(ema21.iloc[-1])
+    below_ema50  = price < float(ema50.iloc[-1])
+    below_sma200 = sma200 is not None and price < float(sma200.iloc[-1])
+
+    # Trend (25 pts) — being below all MAs is bearish structure
+    trend = (8 if below_ema21 else 0) + (9 if below_ema50 else 0) + (8 if below_sma200 else 0)
+
+    # Momentum (25 pts) — negative MACD + negative ROC + breakdown
+    momentum = 0
+    if float(hist.iloc[-1]) < 0:
+        momentum += 10
+    momentum += 8 if roc10 < -3 else (4 if roc10 < 0 else 0)
+    if "momentum_breakdown" in signals:
+        momentum += 7
+    momentum = min(momentum, 25)
+
+    # RSI (20 pts) — ideal short RSI: 40-65 (not yet oversold, room to fall)
+    if 40 <= rsi <= 65:
+        rsi_score = 20
+    elif 65 < rsi <= 72:
+        rsi_score = 12   # getting overbought — good reversal setup
+    elif rsi > 72:
+        rsi_score = 4    # very overbought — can keep running; risky short
+    else:
+        rsi_score = 8    # 35-40: falling into oversold range; caution
+
+    # Volume (15 pts) — high volume on a down day adds conviction
+    if is_down_day and vol_ratio >= 2.0:
+        vol_score = 15
+    elif is_down_day and vol_ratio >= 1.5:
+        vol_score = 10
+    elif vol_ratio >= 1.0:
+        vol_score = 5
+    else:
+        vol_score = 0
+
+    # Pattern (15 pts)
+    if "death_cross" in signals:
+        pat_score = 15
+    elif "bb_breakdown" in signals:
+        pat_score = 10
+    elif "macd_cross_bearish" in signals:
+        pat_score = 8
+    else:
+        pat_score = 0
+
+    composite = trend + momentum + rsi_score + vol_score + pat_score
+
+    return {
+        "symbol":       symbol,
+        "price":        round(price, 2),
+        "short_score":  composite,
+        "grade":        "A" if composite >= 80 else "B" if composite >= 65 else "C" if composite >= 50 else "D",
+        "rsi":          round(rsi, 1),
+        "roc10":        round(roc10, 1),
+        "vol_ratio":    round(vol_ratio, 2),
+        "macd_hist":    round(float(hist.iloc[-1]), 5),
+        "below_ema21":  below_ema21,
+        "below_ema50":  below_ema50,
+        "below_sma200": below_sma200,
+        "firing_signals": signals,
+    }
+
+
 def run_scan(
     load_bars_fn: Callable,
     symbols: List[str],
