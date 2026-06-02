@@ -340,8 +340,10 @@ def _find_alpaca_exit_price(client, symbol: str, entry_date: str, direction: str
 
         orders = client.trading.get_orders(filter=GetOrdersRequest(**params))
         for order in orders:
-            side = str(getattr(order, "side", "")).lower()
-            status = str(getattr(order, "status", "")).lower()
+            raw_side   = getattr(order, "side",   None)
+            raw_status = getattr(order, "status", None)
+            side   = (raw_side.value   if hasattr(raw_side,   "value") else str(raw_side   or "")).lower()
+            status = (raw_status.value if hasattr(raw_status, "value") else str(raw_status or "")).lower()
             if side == exit_side and status == "filled":
                 price = getattr(order, "filled_avg_price", None)
                 if price:
@@ -437,6 +439,44 @@ def _sync_alpaca_plays():
                             )
                             if pnl is not None:
                                 _update_signal_performance(conn, play["signal"] or "", play["direction"] or "LONG", pnl)
+
+                    # Backfill: retry CLOSED plays that have no exit_price yet (last 60 days)
+                    cutoff = (datetime.utcnow() - timedelta(days=60)).isoformat()[:10]
+                    null_exits = conn.execute(
+                        """SELECT * FROM plays WHERE status='CLOSED'
+                           AND exit_price IS NULL AND entry_date >= ?""",
+                        (cutoff,)
+                    ).fetchall()
+                    for play in null_exits:
+                        sym       = play["symbol"]
+                        direction = play["direction"] or "LONG"
+                        exit_price = _find_alpaca_exit_price(
+                            client, sym, play["entry_date"] or "", direction
+                        )
+                        if not exit_price:
+                            continue
+                        entry_p = float(play["entry_price"] or 0)
+                        shares  = float(play["shares"] or 0)
+                        if entry_p and shares:
+                            pnl = round((entry_p - exit_price) * shares * (-1 if direction == "SHORT" else 1), 2)
+                            pnl_pct = round(pnl / (entry_p * shares) * 100, 2)
+                        else:
+                            pnl = pnl_pct = None
+                        stop_l = float(play["stop_loss"] or 0)
+                        take_p = float(play["take_profit"] or 0)
+                        exit_reason = "unknown"
+                        if stop_l > 0 and exit_price <= stop_l * 1.02:
+                            exit_reason = "stop_hit"
+                        elif take_p > 0 and exit_price >= take_p * 0.98:
+                            exit_reason = "target_hit"
+                        reentry_flag = 1 if exit_reason == "target_hit" and pnl and pnl > 0 else 0
+                        conn.execute(
+                            """UPDATE plays SET exit_price=?, pnl=?, pnl_pct=?,
+                               exit_reason=?, reentry_flag=? WHERE id=?""",
+                            (exit_price, pnl, pnl_pct, exit_reason, reentry_flag, play["id"]),
+                        )
+                        if pnl is not None:
+                            _update_signal_performance(conn, play["signal"] or "", direction, pnl)
         except Exception:
             pass
         time.sleep(600)  # run every 10 minutes
@@ -1586,8 +1626,9 @@ def history_metrics():
         ).fetchall()
     if not rows:
         return {"total_pnl": 0, "win_rate": 0, "profit_factor": 0, "n_trades": 0, "monthly": [], "avg_win": 0, "avg_loss": 0}
-    pnls = [r["pnl"] for r in rows if r["pnl"] is not None]
-    wins = [p for p in pnls if p > 0]
+    n_total = len(rows)  # all closed plays, regardless of whether pnl is populated
+    pnls   = [r["pnl"] for r in rows if r["pnl"] is not None]
+    wins   = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p <= 0]
     monthly = {}
     for r in rows:
@@ -1595,13 +1636,13 @@ def history_metrics():
             m = r["exit_date"][:7]
             monthly[m] = monthly.get(m, 0) + r["pnl"]
     return {
-        "total_pnl": round(sum(pnls), 2),
-        "n_trades": len(pnls),
-        "win_rate": round(len(wins) / len(pnls) * 100, 1) if pnls else 0,
+        "total_pnl":     round(sum(pnls), 2),
+        "n_trades":      n_total,
+        "win_rate":      round(len(wins) / len(pnls) * 100, 1) if pnls else 0,
         "profit_factor": round(sum(wins) / abs(sum(losses)), 2) if losses else (999.0 if wins else 0),
-        "avg_win": round(sum(wins) / len(wins), 2) if wins else 0,
-        "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
-        "monthly": [{"month": k, "pnl": round(v, 2)} for k, v in sorted(monthly.items())],
+        "avg_win":       round(sum(wins) / len(wins), 2) if wins else 0,
+        "avg_loss":      round(sum(losses) / len(losses), 2) if losses else 0,
+        "monthly":       [{"month": k, "pnl": round(v, 2)} for k, v in sorted(monthly.items())],
     }
 
 
@@ -1627,6 +1668,51 @@ def reentry_candidates():
             ORDER BY exit_date DESC LIMIT 20
         """).fetchall()
     return [dict(r) for r in rows]
+
+
+@app.post("/api/history/backfill-pnl")
+def backfill_pnl():
+    """Force-retry exit price lookup for CLOSED plays with null pnl (last 60 days)."""
+    client = get_alpaca_client()
+    if not client:
+        raise HTTPException(503, "Alpaca not connected")
+    cutoff = (datetime.utcnow() - timedelta(days=60)).isoformat()[:10]
+    updated = 0
+    with get_db() as conn:
+        null_exits = conn.execute(
+            "SELECT * FROM plays WHERE status='CLOSED' AND exit_price IS NULL AND entry_date >= ?",
+            (cutoff,)
+        ).fetchall()
+        for play in null_exits:
+            sym       = play["symbol"]
+            direction = play["direction"] or "LONG"
+            exit_price = _find_alpaca_exit_price(client, sym, play["entry_date"] or "", direction)
+            if not exit_price:
+                continue
+            entry_p = float(play["entry_price"] or 0)
+            shares  = float(play["shares"] or 0)
+            if entry_p and shares:
+                pnl = round((entry_p - exit_price) * shares * (-1 if direction == "SHORT" else 1), 2)
+                pnl_pct = round(pnl / (entry_p * shares) * 100, 2)
+            else:
+                pnl = pnl_pct = None
+            stop_l = float(play["stop_loss"] or 0)
+            take_p = float(play["take_profit"] or 0)
+            exit_reason = "unknown"
+            if stop_l > 0 and exit_price <= stop_l * 1.02:
+                exit_reason = "stop_hit"
+            elif take_p > 0 and exit_price >= take_p * 0.98:
+                exit_reason = "target_hit"
+            reentry_flag = 1 if exit_reason == "target_hit" and pnl and pnl > 0 else 0
+            conn.execute(
+                """UPDATE plays SET exit_price=?, pnl=?, pnl_pct=?,
+                   exit_reason=?, reentry_flag=? WHERE id=?""",
+                (exit_price, pnl, pnl_pct, exit_reason, reentry_flag, play["id"]),
+            )
+            if pnl is not None:
+                _update_signal_performance(conn, play["signal"] or "", direction, pnl)
+            updated += 1
+    return {"backfilled": updated, "checked": len(null_exits)}
 
 
 @app.get("/api/history/export")
