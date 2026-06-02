@@ -334,7 +334,7 @@ def _find_alpaca_exit_price(client, symbol: str, entry_date: str, direction: str
             except Exception:
                 pass
 
-        params: dict = {"status": QueryOrderStatus.CLOSED, "symbols": [symbol], "limit": 10}
+        params: dict = {"status": QueryOrderStatus.CLOSED, "symbols": [symbol], "limit": 50}
         if after_dt:
             params["after"] = after_dt
 
@@ -450,9 +450,10 @@ def _sync_alpaca_plays():
                     for play in null_exits:
                         sym       = play["symbol"]
                         direction = play["direction"] or "LONG"
-                        exit_price = _find_alpaca_exit_price(
-                            client, sym, play["entry_date"] or "", direction
-                        )
+                        # Pass "" so _find_alpaca_exit_price skips the 'after' filter —
+                        # entry_date on auto-discovered plays is the discovery date, not the
+                        # actual trade date, so the filter would cut off the real exit orders.
+                        exit_price = _find_alpaca_exit_price(client, sym, "", direction)
                         if not exit_price:
                             continue
                         entry_p = float(play["entry_price"] or 0)
@@ -1686,7 +1687,8 @@ def backfill_pnl():
         for play in null_exits:
             sym       = play["symbol"]
             direction = play["direction"] or "LONG"
-            exit_price = _find_alpaca_exit_price(client, sym, play["entry_date"] or "", direction)
+            # Skip 'after' filter — auto-discovered plays have entry_date = discovery date
+            exit_price = _find_alpaca_exit_price(client, sym, "", direction)
             if not exit_price:
                 continue
             entry_p = float(play["entry_price"] or 0)
