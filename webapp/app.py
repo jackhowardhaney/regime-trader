@@ -1624,9 +1624,11 @@ def bt_history():
 
 
 # ── History routes ─────────────────────────────────────────────────
+_REAL_TRADE = "status='CLOSED' AND exit_price IS NOT NULL"
+
 @app.get("/api/history")
 def trade_history(symbol: Optional[str] = None, days: Optional[int] = None):
-    q = "SELECT * FROM plays WHERE status='CLOSED'"
+    q = f"SELECT * FROM plays WHERE {_REAL_TRADE}"
     p = []
     if symbol:
         q += " AND symbol=?"; p.append(symbol.upper())
@@ -1643,11 +1645,11 @@ def trade_history(symbol: Optional[str] = None, days: Optional[int] = None):
 def history_metrics():
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT pnl, pnl_pct, exit_date FROM plays WHERE status='CLOSED' ORDER BY exit_date"
+            f"SELECT pnl, pnl_pct, exit_date FROM plays WHERE {_REAL_TRADE} ORDER BY exit_date"
         ).fetchall()
     if not rows:
         return {"total_pnl": 0, "win_rate": 0, "profit_factor": 0, "n_trades": 0, "monthly": [], "avg_win": 0, "avg_loss": 0}
-    n_total = len(rows)  # all closed plays, regardless of whether pnl is populated
+    n_total = len(rows)
     pnls   = [r["pnl"] for r in rows if r["pnl"] is not None]
     wins   = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p < 0]   # strictly negative only
@@ -1857,7 +1859,7 @@ def backfill_pnl():
 @app.get("/api/history/export")
 def export_history():
     with get_db() as conn:
-        rows = conn.execute("SELECT * FROM plays WHERE status='CLOSED' ORDER BY exit_date DESC").fetchall()
+        rows = conn.execute(f"SELECT * FROM plays WHERE {_REAL_TRADE} ORDER BY exit_date DESC").fetchall()
     if not rows:
         raise HTTPException(404, "No closed trades")
     df = pd.DataFrame([dict(r) for r in rows])
