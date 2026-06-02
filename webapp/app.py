@@ -1405,21 +1405,28 @@ def blend_analysis():
 # ── Plays routes ───────────────────────────────────────────────────
 @app.get("/api/plays/equity-curve")
 def plays_equity_curve():
-    """Cumulative P&L curve from closed trades for the Plays tab chart."""
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT pnl, exit_date FROM plays WHERE status='CLOSED' AND pnl IS NOT NULL ORDER BY exit_date"
-        ).fetchall()
-    if not rows:
+    """Account equity over time from Alpaca portfolio history (daily snapshots)."""
+    client = get_alpaca_client()
+    if not client:
         return {"dates": [], "values": [], "starting": 10000.0}
-    starting = 10000.0
-    equity = starting
-    dates, values = [], []
-    for r in rows:
-        equity += (r["pnl"] or 0)
-        dates.append((r["exit_date"] or "")[:10])
-        values.append(round(equity, 2))
-    return {"dates": dates, "values": values, "starting": starting}
+    try:
+        from alpaca.trading.requests import PortfolioHistoryRequest
+        history = client.trading.get_portfolio_history(
+            filter=PortfolioHistoryRequest(period="1M", timeframe="1D")
+        )
+        timestamps = history.timestamp or []
+        equities   = history.equity   or []
+        pairs = [
+            (datetime.utcfromtimestamp(t).strftime("%Y-%m-%d"), round(float(e), 2))
+            for t, e in zip(timestamps, equities)
+            if e is not None and float(e) > 0
+        ]
+        if not pairs:
+            return {"dates": [], "values": [], "starting": 10000.0}
+        dates, values = zip(*pairs)
+        return {"dates": list(dates), "values": list(values), "starting": 10000.0}
+    except Exception:
+        return {"dates": [], "values": [], "starting": 10000.0}
 
 
 @app.get("/api/plays")
