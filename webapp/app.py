@@ -1671,6 +1671,21 @@ def reentry_candidates():
     return [dict(r) for r in rows]
 
 
+@app.get("/api/debug/orders")
+def debug_orders():
+    """Return raw order history from Alpaca for debugging (dev use)."""
+    client = get_alpaca_client()
+    if not client:
+        raise HTTPException(503, "Alpaca not connected")
+    with get_db() as conn:
+        null_syms = [r["symbol"] for r in conn.execute(
+            "SELECT DISTINCT symbol FROM plays WHERE status='CLOSED' AND exit_price IS NULL"
+        ).fetchall()]
+    orders = client.get_order_history(limit=200)
+    relevant = [o for o in orders if o.get("symbol", "").upper() in [s.upper() for s in null_syms]]
+    return {"null_exit_symbols": null_syms, "relevant_orders": relevant, "total_orders_fetched": len(orders)}
+
+
 @app.post("/api/history/backfill-pnl")
 def backfill_pnl():
     """Force-retry exit price lookup for CLOSED plays with null pnl (last 60 days)."""
