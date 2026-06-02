@@ -1706,6 +1706,63 @@ def debug_orders():
     return {"null_exit_symbols": null_syms, "relevant_orders": relevant, "total_orders_fetched": len(orders)}
 
 
+@app.post("/api/history/fix-null-pnl")
+def fix_null_pnl():
+    """Direct fix: set pnl=0 for CLOSED plays whose entries never executed.
+    Also handles the duplicate MET play created by the sync after bracket expiry."""
+    client = get_alpaca_client()
+    if not client:
+        raise HTTPException(503, "Alpaca not connected")
+    all_orders = client.get_order_history(limit=500)
+
+    def _norm(raw: str) -> str:
+        return raw.split(".")[-1].lower() if raw else ""
+
+    # Build set of symbols that have a filled entry order in Alpaca
+    filled_entry_syms: set = set()
+    for o in all_orders:
+        status = _norm(o.get("status", ""))
+        side   = _norm(o.get("side", ""))
+        filled_price = float(o.get("filled_avg_price") or 0)
+        if status == "filled" and filled_price > 0:
+            # Could be buy (LONG entry) or sell (SHORT entry) — just track the symbol
+            filled_entry_syms.add(o.get("symbol", "").upper())
+
+    fixed = []
+    with get_db() as conn:
+        null_plays = conn.execute(
+            "SELECT * FROM plays WHERE status='CLOSED' AND pnl IS NULL"
+        ).fetchall()
+        for play in null_plays:
+            sym = play["symbol"].upper()
+            pid = play["id"]
+            direction = play["direction"] or "LONG"
+
+            # Check if a duplicate ACTIVE play exists for this symbol+direction
+            dup = conn.execute(
+                "SELECT id FROM plays WHERE symbol=? AND direction=? AND status='ACTIVE'",
+                (sym, direction)
+            ).fetchone()
+
+            if sym not in filled_entry_syms:
+                # Entry never filled on Alpaca — phantom trade
+                conn.execute(
+                    "UPDATE plays SET pnl=0.0, pnl_pct=0.0, exit_reason='entry_expired' WHERE id=?",
+                    (pid,)
+                )
+                fixed.append({"symbol": sym, "id": pid, "action": "entry_expired pnl=0"})
+            elif dup:
+                # Entry did fill but sync duplicated the play — original CLOSED is superseded
+                conn.execute(
+                    "UPDATE plays SET pnl=0.0, pnl_pct=0.0, exit_reason='superseded_by_sync' WHERE id=?",
+                    (pid,)
+                )
+                fixed.append({"symbol": sym, "id": pid, "action": "superseded_by_sync pnl=0"})
+            else:
+                fixed.append({"symbol": sym, "id": pid, "action": "skipped_needs_exit_price"})
+    return {"fixed": len([f for f in fixed if "skipped" not in f["action"]]), "details": fixed}
+
+
 @app.post("/api/history/backfill-pnl")
 def backfill_pnl():
     """Force-retry exit price lookup for CLOSED plays with null pnl (last 60 days).
