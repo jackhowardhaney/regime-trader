@@ -1331,7 +1331,7 @@ def set_blend_ratio(body: dict):
 def blend_analysis():
     with get_db() as conn:
         src_rows = conn.execute(
-            "SELECT source, pnl, pnl_pct FROM plays WHERE status='CLOSED' AND pnl IS NOT NULL"
+            f"SELECT source, pnl, pnl_pct FROM plays WHERE {_REAL_TRADE} AND pnl IS NOT NULL"
         ).fetchall()
         wl_rows = conn.execute(
             "SELECT symbol, score, bsh, notes FROM watchlist ORDER BY score DESC NULLS LAST"
