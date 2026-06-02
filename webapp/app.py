@@ -1650,17 +1650,18 @@ def history_metrics():
     n_total = len(rows)  # all closed plays, regardless of whether pnl is populated
     pnls   = [r["pnl"] for r in rows if r["pnl"] is not None]
     wins   = [p for p in pnls if p > 0]
-    losses = [p for p in pnls if p <= 0]
+    losses = [p for p in pnls if p < 0]   # strictly negative only
     monthly = {}
     for r in rows:
-        if r["exit_date"] and r["pnl"] is not None:
+        if r["exit_date"] and r["pnl"] is not None and r["pnl"] != 0:
             m = r["exit_date"][:7]
             monthly[m] = monthly.get(m, 0) + r["pnl"]
+    loss_sum = abs(sum(losses)) if losses else 0
     return {
         "total_pnl":     round(sum(pnls), 2),
         "n_trades":      n_total,
         "win_rate":      round(len(wins) / len(pnls) * 100, 1) if pnls else 0,
-        "profit_factor": round(sum(wins) / abs(sum(losses)), 2) if losses else (999.0 if wins else 0),
+        "profit_factor": round(sum(wins) / loss_sum, 2) if losses and loss_sum > 0 else (999.0 if wins else 0),
         "avg_win":       round(sum(wins) / len(wins), 2) if wins else 0,
         "avg_loss":      round(sum(losses) / len(losses), 2) if losses else 0,
         "monthly":       [{"month": k, "pnl": round(v, 2)} for k, v in sorted(monthly.items())],
