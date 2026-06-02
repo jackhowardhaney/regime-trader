@@ -444,40 +444,60 @@ def _sync_alpaca_plays():
                     cutoff = (datetime.utcnow() - timedelta(days=60)).isoformat()[:10]
                     null_exits = conn.execute(
                         """SELECT * FROM plays WHERE status='CLOSED'
-                           AND exit_price IS NULL AND entry_date >= ?""",
+                           AND exit_price IS NULL AND pnl IS NULL AND entry_date >= ?""",
                         (cutoff,)
                     ).fetchall()
-                    for play in null_exits:
-                        sym       = play["symbol"]
-                        direction = play["direction"] or "LONG"
-                        # Pass "" so _find_alpaca_exit_price skips the 'after' filter —
-                        # entry_date on auto-discovered plays is the discovery date, not the
-                        # actual trade date, so the filter would cut off the real exit orders.
-                        exit_price = _find_alpaca_exit_price(client, sym, "", direction)
-                        if not exit_price:
-                            continue
-                        entry_p = float(play["entry_price"] or 0)
-                        shares  = float(play["shares"] or 0)
-                        if entry_p and shares:
-                            pnl = round((entry_p - exit_price) * shares * (-1 if direction == "SHORT" else 1), 2)
-                            pnl_pct = round(pnl / (entry_p * shares) * 100, 2)
-                        else:
-                            pnl = pnl_pct = None
-                        stop_l = float(play["stop_loss"] or 0)
-                        take_p = float(play["take_profit"] or 0)
-                        exit_reason = "unknown"
-                        if stop_l > 0 and exit_price <= stop_l * 1.02:
-                            exit_reason = "stop_hit"
-                        elif take_p > 0 and exit_price >= take_p * 0.98:
-                            exit_reason = "target_hit"
-                        reentry_flag = 1 if exit_reason == "target_hit" and pnl and pnl > 0 else 0
-                        conn.execute(
-                            """UPDATE plays SET exit_price=?, pnl=?, pnl_pct=?,
-                               exit_reason=?, reentry_flag=? WHERE id=?""",
-                            (exit_price, pnl, pnl_pct, exit_reason, reentry_flag, play["id"]),
-                        )
-                        if pnl is not None:
-                            _update_signal_performance(conn, play["signal"] or "", direction, pnl)
+                    if null_exits:
+                        bg_orders = client.get_order_history(limit=500)
+                        def _norm_bg(raw: str) -> str:
+                            return raw.split(".")[-1].lower() if raw else ""
+                        for play in null_exits:
+                            sym       = play["symbol"]
+                            direction = play["direction"] or "LONG"
+                            entry_p   = float(play["entry_price"] or 0)
+                            shares    = float(play["shares"] or 0)
+                            entry_side_val = "sell" if direction == "SHORT" else "buy"
+                            exit_side_val  = "buy"  if direction == "SHORT" else "sell"
+                            sym_orders = [o for o in bg_orders if o.get("symbol","").upper() == sym.upper()]
+                            entry_ok = any(
+                                _norm_bg(o.get("side","")) == entry_side_val
+                                and _norm_bg(o.get("status","")) == "filled"
+                                and float(o.get("filled_avg_price") or 0) > 0
+                                for o in sym_orders
+                            )
+                            if not entry_ok:
+                                conn.execute(
+                                    "UPDATE plays SET pnl=0.0, pnl_pct=0.0, exit_reason='entry_expired' WHERE id=?",
+                                    (play["id"],)
+                                )
+                                continue
+                            exit_price = None
+                            for o in sym_orders:
+                                if _norm_bg(o.get("side","")) == exit_side_val and _norm_bg(o.get("status","")) == "filled":
+                                    p = float(o.get("filled_avg_price") or 0)
+                                    if p > 0:
+                                        exit_price = p
+                                        break
+                            if not exit_price:
+                                continue
+                            mult = -1 if direction == "SHORT" else 1
+                            pnl     = round((exit_price - entry_p) * shares * mult, 2) if entry_p and shares else None
+                            pnl_pct = round(pnl / (entry_p * shares) * 100, 2) if pnl is not None else None
+                            stop_l = float(play["stop_loss"] or 0)
+                            take_p = float(play["take_profit"] or 0)
+                            exit_reason = "unknown"
+                            if stop_l > 0 and exit_price <= stop_l * 1.02:
+                                exit_reason = "stop_hit"
+                            elif take_p > 0 and exit_price >= take_p * 0.98:
+                                exit_reason = "target_hit"
+                            reentry_flag = 1 if exit_reason == "target_hit" and pnl and pnl > 0 else 0
+                            conn.execute(
+                                """UPDATE plays SET exit_price=?, pnl=?, pnl_pct=?,
+                                   exit_reason=?, reentry_flag=? WHERE id=?""",
+                                (exit_price, pnl, pnl_pct, exit_reason, reentry_flag, play["id"]),
+                            )
+                            if pnl is not None:
+                                _update_signal_performance(conn, play["signal"] or "", direction, pnl)
         except Exception:
             pass
         time.sleep(600)  # run every 10 minutes
@@ -1688,11 +1708,18 @@ def debug_orders():
 
 @app.post("/api/history/backfill-pnl")
 def backfill_pnl():
-    """Force-retry exit price lookup for CLOSED plays with null pnl (last 60 days)."""
+    """Force-retry exit price lookup for CLOSED plays with null pnl (last 60 days).
+
+    Two cases:
+    - Entry order expired/cancelled (never filled) → pnl=0, exit_reason='entry_expired'
+    - Entry filled, exit order found → compute pnl normally
+    """
     client = get_alpaca_client()
     if not client:
         raise HTTPException(503, "Alpaca not connected")
     cutoff = (datetime.utcnow() - timedelta(days=60)).isoformat()[:10]
+    # Fetch all orders once to avoid repeated API calls
+    all_orders = client.get_order_history(limit=500)
     updated = 0
     with get_db() as conn:
         null_exits = conn.execute(
@@ -1702,17 +1729,54 @@ def backfill_pnl():
         for play in null_exits:
             sym       = play["symbol"]
             direction = play["direction"] or "LONG"
-            # Skip 'after' filter — auto-discovered plays have entry_date = discovery date
-            exit_price = _find_alpaca_exit_price(client, sym, "", direction)
-            if not exit_price:
+            entry_p   = float(play["entry_price"] or 0)
+            shares    = float(play["shares"] or 0)
+            entry_side_val = "sell" if direction == "SHORT" else "buy"
+            exit_side_val  = "buy"  if direction == "SHORT" else "sell"
+
+            # Filter orders for this symbol
+            sym_orders = [o for o in all_orders if o.get("symbol", "").upper() == sym.upper()]
+
+            def _norm(raw: str) -> str:
+                return raw.split(".")[-1].lower() if raw else ""
+
+            # Check if entry was ever filled
+            entry_filled_price = None
+            for o in sym_orders:
+                if _norm(o.get("side", "")) == entry_side_val and _norm(o.get("status", "")) == "filled":
+                    p = float(o.get("filled_avg_price") or 0)
+                    if p > 0:
+                        entry_filled_price = p
+                        break
+
+            if entry_filled_price is None:
+                # Entry expired/cancelled — trade was never actually placed
+                conn.execute(
+                    "UPDATE plays SET pnl=0.0, pnl_pct=0.0, exit_reason='entry_expired' WHERE id=?",
+                    (play["id"],)
+                )
+                updated += 1
                 continue
-            entry_p = float(play["entry_price"] or 0)
-            shares  = float(play["shares"] or 0)
+
+            # Entry filled — look for a filled exit order
+            exit_price = None
+            for o in sym_orders:
+                if _norm(o.get("side", "")) == exit_side_val and _norm(o.get("status", "")) == "filled":
+                    p = float(o.get("filled_avg_price") or 0)
+                    if p > 0:
+                        exit_price = p
+                        break
+
+            if exit_price is None:
+                continue  # exit not yet known; background sync will catch it later
+
             if entry_p and shares:
-                pnl = round((entry_p - exit_price) * shares * (-1 if direction == "SHORT" else 1), 2)
+                mult = -1 if direction == "SHORT" else 1
+                pnl     = round((exit_price - entry_p) * shares * mult, 2)
                 pnl_pct = round(pnl / (entry_p * shares) * 100, 2)
             else:
                 pnl = pnl_pct = None
+
             stop_l = float(play["stop_loss"] or 0)
             take_p = float(play["take_profit"] or 0)
             exit_reason = "unknown"
