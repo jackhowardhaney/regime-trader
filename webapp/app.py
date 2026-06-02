@@ -316,38 +316,38 @@ def _background_daily_scan():
 
 
 def _find_alpaca_exit_price(client, symbol: str, entry_date: str, direction: str = "LONG") -> Optional[float]:
-    """Look up the most recent filled exit order for symbol since entry_date.
-    LONG exits = SELL orders. SHORT exits = BUY orders (covering the short)."""
-    try:
-        from alpaca.trading.requests import GetOrdersRequest
-        from alpaca.trading.enums import QueryOrderStatus
-        from datetime import timezone
+    """Look up the most recent filled exit order for symbol.
+    LONG exits = SELL orders. SHORT exits = BUY orders (covering the short).
 
+    Uses get_order_history (limit=200) and filters client-side to avoid
+    potential SDK issues with the GetOrdersRequest 'symbols' parameter.
+    """
+    try:
         exit_side = "buy" if direction == "SHORT" else "sell"
 
-        after_dt = None
+        after_ts: Optional[str] = None
         if entry_date:
             try:
-                after_dt = datetime.fromisoformat(entry_date.replace("Z", "+00:00"))
-                if after_dt.tzinfo is None:
-                    after_dt = after_dt.replace(tzinfo=timezone.utc)
+                after_ts = datetime.fromisoformat(entry_date.replace("Z", "")).isoformat()
             except Exception:
                 pass
 
-        params: dict = {"status": QueryOrderStatus.CLOSED, "symbols": [symbol], "limit": 50}
-        if after_dt:
-            params["after"] = after_dt
-
-        orders = client.trading.get_orders(filter=GetOrdersRequest(**params))
+        orders = client.get_order_history(limit=200)
         for order in orders:
-            raw_side   = getattr(order, "side",   None)
-            raw_status = getattr(order, "status", None)
-            side   = (raw_side.value   if hasattr(raw_side,   "value") else str(raw_side   or "")).lower()
-            status = (raw_status.value if hasattr(raw_status, "value") else str(raw_status or "")).lower()
-            if side == exit_side and status == "filled":
-                price = getattr(order, "filled_avg_price", None)
-                if price:
-                    return float(price)
+            if order.get("symbol", "").upper() != symbol.upper():
+                continue
+            raw_side   = order.get("side",   "")
+            raw_status = order.get("status", "")
+            # Handle both plain value ("sell") and enum-string ("OrderSide.SELL")
+            side   = raw_side.split(".")[-1].lower()
+            status = raw_status.split(".")[-1].lower()
+            if side != exit_side or status != "filled":
+                continue
+            if after_ts and order.get("filled_at") and order["filled_at"] < after_ts:
+                continue
+            price = order.get("filled_avg_price")
+            if price:
+                return float(price)
     except Exception:
         pass
     return None
