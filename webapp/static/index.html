@@ -84,8 +84,27 @@
 <!-- Explosion canvas -->
 <canvas id="explosion-canvas" style="position:fixed;inset:0;z-index:10001;pointer-events:none;display:none"></canvas>
 
+<!-- ── Password Gate (shown first; removed on auth) ── -->
+<div id="password-modal" style="position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.97);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(8px)">
+  <div style="background:linear-gradient(160deg,#0a0800,#1a1200,#0a0800);border:2px solid #92400e;border-radius:24px;padding:40px 44px;text-align:center;max-width:420px;width:92vw;box-shadow:0 0 100px rgba(251,191,36,0.2),0 0 40px rgba(251,191,36,0.08)">
+    <div style="font-size:40px;margin-bottom:12px">🔐</div>
+    <h2 style="font-size:22px;font-weight:800;color:#fbbf24;margin-bottom:6px;letter-spacing:-0.5px">Twan Automatic Trader</h2>
+    <p style="color:#92400e;font-size:13px;margin-bottom:24px">Enter your password to access the dashboard</p>
+    <input type="password" id="pw-input" placeholder="Password"
+      onkeydown="if(event.key==='Enter')submitPassword()"
+      style="width:100%;background:#1a1200;border:1.5px solid #92400e;border-radius:10px;padding:12px 16px;font-size:15px;color:#fbbf24;outline:none;margin-bottom:12px;box-sizing:border-box;letter-spacing:1px"
+      onfocus="this.style.borderColor='#d97706'" onblur="this.style.borderColor='#92400e'"/>
+    <div id="pw-error" style="display:none;color:#f87171;font-size:12px;margin-bottom:10px">Incorrect password — try again</div>
+    <button onclick="submitPassword()"
+      style="width:100%;background:linear-gradient(135deg,#b45309,#d97706,#b45309);color:#fff;border:none;border-radius:10px;padding:13px;font-size:15px;font-weight:800;cursor:pointer;letter-spacing:0.5px;box-shadow:0 0 20px rgba(251,191,36,0.3);transition:all 0.15s"
+      onmouseover="this.style.boxShadow='0 0 40px rgba(251,191,36,0.6)'" onmouseout="this.style.boxShadow='0 0 20px rgba(251,191,36,0.3)'">
+      ENTER
+    </button>
+  </div>
+</div>
+
 <!-- ── Startup Modal ── -->
-<div id="startup-modal" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.95);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)">
+<div id="startup-modal" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.95);display:none;align-items:center;justify-content:center;backdrop-filter:blur(6px)">
   <div style="background:linear-gradient(160deg,#0a0800,#1a1200,#0a0800);border:2px solid #92400e;border-radius:24px;padding:36px 40px;text-align:center;max-width:660px;width:95vw;box-shadow:0 0 100px rgba(251,191,36,0.25),0 0 40px rgba(251,191,36,0.1)">
 
     <div style="padding-top:8px">
@@ -851,6 +870,7 @@
   <!-- Monthly chart -->
   <div class="card p-4 mb-6">
     <h3 class="font-medium text-gray-900 mb-3">Monthly P&L</h3>
+    <div id="h-monthly-empty" style="display:none;text-align:center;padding:40px 0;color:#9ca3af;font-size:14px">No closed trades yet — chart will populate as positions close</div>
     <canvas id="h-monthly-chart" height="120"></canvas>
   </div>
 
@@ -1096,12 +1116,62 @@ let _pdTvWidget = null;
 // ── Utility ──────────────────────────────────────────────────────────
 async function api(path, opts={}) {
   const r = await fetch(API + path, opts);
+  if (r.status === 401) {
+    if (!document.getElementById('password-modal')) {
+      alert('Session expired — please refresh and log in again.');
+    }
+    throw new Error('unauthorized');
+  }
   if (!r.ok) {
     const t = await r.text().catch(()=>'');
     throw new Error(t || r.statusText);
   }
   return r.json();
 }
+
+async function initApp() {
+  try {
+    const r = await fetch('/api/auth/status');
+    const d = await r.json();
+    if (d.authenticated) {
+      const pm = document.getElementById('password-modal');
+      if (pm) pm.remove();
+      document.getElementById('startup-modal').style.display = 'flex';
+    }
+  } catch(e) {}
+}
+
+async function submitPassword() {
+  const pw = document.getElementById('pw-input').value.trim();
+  const errEl = document.getElementById('pw-error');
+  errEl.style.display = 'none';
+  if (!pw) return;
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: pw})
+    });
+    if (r.ok) {
+      const pm = document.getElementById('password-modal');
+      pm.style.transition = 'opacity 0.3s';
+      pm.style.opacity = '0';
+      setTimeout(() => {
+        if (pm) pm.remove();
+        document.getElementById('startup-modal').style.display = 'flex';
+      }, 300);
+    } else {
+      errEl.style.display = 'block';
+      document.getElementById('pw-input').value = '';
+      document.getElementById('pw-input').focus();
+    }
+  } catch(e) {
+    errEl.textContent = 'Connection error — try again';
+    errEl.style.display = 'block';
+  }
+}
+
+window.addEventListener('DOMContentLoaded', initApp);
 
 function fmt$(n) { return n == null ? '—' : '$'+Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function fmtPct(n) { return n == null ? '—' : (n>0?'+':'')+Number(n).toFixed(2)+'%'; }
@@ -2893,7 +2963,15 @@ function renderHistoryMetrics(m) {
 
 function renderHistoryChart(monthly) {
   if(hMonthlyChart) hMonthlyChart.destroy();
-  if(!monthly.length) return;
+  const emptyEl = document.getElementById('h-monthly-empty');
+  const chartEl = document.getElementById('h-monthly-chart');
+  if(!monthly.length) {
+    if(emptyEl) emptyEl.style.display = 'block';
+    if(chartEl) chartEl.style.display = 'none';
+    return;
+  }
+  if(emptyEl) emptyEl.style.display = 'none';
+  if(chartEl) chartEl.style.display = 'block';
   hMonthlyChart = new Chart(document.getElementById('h-monthly-chart').getContext('2d'), {
     type:'bar',
     data: {

@@ -1,5 +1,6 @@
 """Regime Trader Web App — FastAPI backend."""
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -17,9 +18,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -46,6 +47,50 @@ DEPLOY_TIME = datetime.utcnow()
 app = FastAPI(title="Regime Trader")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+# ── Auth ────────────────────────────────────────────────────────────
+_DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "65Alannah")
+_SESSION_SECRET     = os.getenv("SESSION_SECRET", "regime-trader-2024")
+_BOT_SECRET         = os.getenv("BOT_SECRET", "")
+_VALID_TOKEN = hashlib.sha256(
+    f"{_SESSION_SECRET}:{_DASHBOARD_PASSWORD}".encode()
+).hexdigest()
+_AUTH_EXCLUDED = {"/api/auth/login", "/api/auth/logout", "/api/auth/status"}
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if (request.method == "OPTIONS"
+            or not path.startswith("/api/")
+            or path in _AUTH_EXCLUDED):
+        return await call_next(request)
+    # Session cookie (browser)
+    if request.cookies.get("rt_session") == _VALID_TOKEN:
+        return await call_next(request)
+    # Bot-secret header (scanner service)
+    if _BOT_SECRET and request.headers.get("X-Bot-Secret") == _BOT_SECRET:
+        return await call_next(request)
+    return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+@app.post("/api/auth/login")
+async def auth_login(request: Request):
+    body = await request.json()
+    if body.get("password") != _DASHBOARD_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid password")
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie("rt_session", _VALID_TOKEN, httponly=True, samesite="lax", max_age=86400 * 30)
+    return resp
+
+@app.post("/api/auth/logout")
+async def auth_logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("rt_session")
+    return resp
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    token = request.cookies.get("rt_session", "")
+    return {"authenticated": token == _VALID_TOKEN}
 
 
 # ── Database ───────────────────────────────────────────────────────

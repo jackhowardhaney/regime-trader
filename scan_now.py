@@ -61,7 +61,8 @@ RATIO_STEP           = 0.05
 RATIO_MIN            = 0.25
 RATIO_MAX            = 0.75
 
-WEBAPP_URL = os.getenv("WEBAPP_URL", "").rstrip("/")
+WEBAPP_URL  = os.getenv("WEBAPP_URL", "").rstrip("/")
+_BOT_SECRET = os.getenv("BOT_SECRET", "")
 
 try:
     from data.sector_symbols import ALL_HANDPICK_SYMBOLS as SCAN_UNIVERSE
@@ -82,10 +83,20 @@ def _atr(bars: pd.DataFrame, period: int = ATR_PERIOD) -> float:
     return float(tr.ewm(span=period, adjust=False).mean().iloc[-1])
 
 
+def _bot_headers(extra: dict | None = None) -> dict:
+    h = {"Content-Type": "application/json"}
+    if _BOT_SECRET:
+        h["X-Bot-Secret"] = _BOT_SECRET
+    if extra:
+        h.update(extra)
+    return h
+
+
 def _api_get(path: str) -> dict:
     if not WEBAPP_URL:
         return {}
-    req = _urllib_request.Request(f"{WEBAPP_URL}{path}", method="GET")
+    req = _urllib_request.Request(f"{WEBAPP_URL}{path}", method="GET",
+                                  headers=_bot_headers())
     with _urllib_request.urlopen(req, timeout=12) as r:
         return json.loads(r.read())
 
@@ -96,7 +107,7 @@ def _api_put(path: str, body: dict) -> dict:
     payload = json.dumps(body).encode()
     req = _urllib_request.Request(
         f"{WEBAPP_URL}{path}", data=payload,
-        headers={"Content-Type": "application/json"}, method="PUT",
+        headers=_bot_headers(), method="PUT",
     )
     with _urllib_request.urlopen(req, timeout=12) as r:
         return json.loads(r.read())
@@ -108,7 +119,7 @@ def _api_post(path: str, body: dict) -> dict:
     payload = json.dumps(body).encode()
     req = _urllib_request.Request(
         f"{WEBAPP_URL}{path}", data=payload,
-        headers={"Content-Type": "application/json"}, method="POST",
+        headers=_bot_headers(), method="POST",
     )
     with _urllib_request.urlopen(req, timeout=12) as r:
         return json.loads(r.read())
