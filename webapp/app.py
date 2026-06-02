@@ -251,12 +251,15 @@ def _background_daily_scan():
         time.sleep(3600)  # check every hour; scan gate prevents re-runs same day
 
 
-def _find_alpaca_exit_price(client, symbol: str, entry_date: str) -> Optional[float]:
-    """Look up the most recent filled SELL order for symbol since entry_date."""
+def _find_alpaca_exit_price(client, symbol: str, entry_date: str, direction: str = "LONG") -> Optional[float]:
+    """Look up the most recent filled exit order for symbol since entry_date.
+    LONG exits = SELL orders. SHORT exits = BUY orders (covering the short)."""
     try:
         from alpaca.trading.requests import GetOrdersRequest
-        from alpaca.trading.enums import QueryOrderStatus, OrderSide
+        from alpaca.trading.enums import QueryOrderStatus
         from datetime import timezone
+
+        exit_side = "buy" if direction == "SHORT" else "sell"
 
         after_dt = None
         if entry_date:
@@ -275,7 +278,7 @@ def _find_alpaca_exit_price(client, symbol: str, entry_date: str) -> Optional[fl
         for order in orders:
             side = str(getattr(order, "side", "")).lower()
             status = str(getattr(order, "status", "")).lower()
-            if side == "sell" and status == "filled":
+            if side == exit_side and status == "filled":
                 price = getattr(order, "filled_avg_price", None)
                 if price:
                     return float(price)
@@ -337,14 +340,18 @@ def _sync_alpaca_plays():
                                 )
                         else:
                             # Position gone — find exit price from closed orders
+                            direction = play["direction"] or "LONG"
                             exit_price = _find_alpaca_exit_price(
-                                client, sym, play["entry_date"] or ""
+                                client, sym, play["entry_date"] or "", direction
                             )
                             entry_p = float(play["entry_price"] or 0)
                             shares  = float(play["shares"] or 0)
                             if exit_price and entry_p and shares:
-                                pnl     = round((exit_price - entry_p) * shares, 2)
-                                pnl_pct = round((exit_price - entry_p) / entry_p * 100, 2)
+                                if direction == "SHORT":
+                                    pnl = round((entry_p - exit_price) * shares, 2)
+                                else:
+                                    pnl = round((exit_price - entry_p) * shares, 2)
+                                pnl_pct = round(pnl / (entry_p * shares) * 100, 2)
                             else:
                                 pnl = pnl_pct = None
                             conn.execute(

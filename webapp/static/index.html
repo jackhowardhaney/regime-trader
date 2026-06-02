@@ -1112,6 +1112,7 @@ function switchTab(t) {
     initBotSlideshow('bot-info-backtest');
   } else if(t==='history') {
     loadHistory();
+    refreshTimer = setInterval(loadHistory, 30000);
   }
 }
 
