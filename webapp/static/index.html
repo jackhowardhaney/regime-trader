@@ -522,13 +522,13 @@
       <thead>
         <tr>
           <th class="brok-th-left">Symbol / Name</th>
-          <th class="brok-th">Quantity</th>
-          <th class="brok-th">Price</th>
+          <th class="brok-th">Qty</th>
+          <th class="brok-th">Entry → Current</th>
           <th class="brok-th">Market Value</th>
-          <th class="brok-th">Capital Invested</th>
           <th class="brok-th">Day Change<br><span style="font-weight:400;color:#6b7280">$ | %</span></th>
           <th class="brok-th">Gain / Loss<br><span style="font-weight:400;color:#6b7280">$ | %</span></th>
           <th class="brok-th">Stop / Target</th>
+          <th class="brok-th">Date Bought / Held</th>
           <th class="brok-th">Actions</th>
         </tr>
       </thead>
@@ -2015,6 +2015,18 @@ function renderQueuedPlays(plays) {
   }).join('');
 }
 
+function timeHeld(entryDate) {
+  if (!entryDate) return '—';
+  const ms = Date.now() - new Date(entryDate).getTime();
+  if (ms < 0) return '—';
+  const days = Math.floor(ms / 86400000);
+  const hrs  = Math.floor((ms % 86400000) / 3600000);
+  const mins = Math.floor((ms % 3600000) / 60000);
+  if (days >= 1) return `${days}d ${hrs}h`;
+  if (hrs >= 1)  return `${hrs}h ${mins}m`;
+  return `${mins}m`;
+}
+
 function renderActivePlays(plays) {
   const tbody = document.getElementById('plays-active-body');
   if(!plays.length) {
@@ -2031,18 +2043,23 @@ function renderActivePlays(plays) {
     const glPct   = capital > 0 ? (gl$ / capital * 100) : 0;
     const dayChg$ = p.day_change != null ? p.day_change * shares : null;
     const dayPct  = p.day_change_pct != null ? p.day_change_pct : null;
-    const glColor = gl$ >= 0 ? '#16a34a' : '#dc2626';
+    const glColor  = gl$ >= 0 ? '#16a34a' : '#dc2626';
     const dayColor = dayChg$ == null ? '#6b7280' : dayChg$ >= 0 ? '#16a34a' : '#dc2626';
+    const curColor = cur > entry ? '#16a34a' : cur < entry ? '#dc2626' : '#6b7280';
     const bg = i % 2 === 1 ? 'background:#f9fafb' : '';
+    const entryDateStr = p.entry_date ? new Date(p.entry_date).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—';
     return `<tr style="${bg}">
       <td class="brok-td-left">
         ${_clickableTicker(p)}
         <div class="brok-name" style="font-size:11px;max-width:220px;line-height:1.4">${convictionStatement(p.direction, p.signal)}</div>
       </td>
       <td class="brok-td">${shares}</td>
-      <td class="brok-td">${cur ? fmt$(cur) : '—'}</td>
+      <td class="brok-td" style="font-size:12px">
+        <span style="color:#6b7280">${fmt$(entry)}</span>
+        <span style="color:#9ca3af;margin:0 2px">→</span>
+        <span style="color:${curColor};font-weight:600">${cur ? fmt$(cur) : '—'}</span>
+      </td>
       <td class="brok-td">${fmt$(mktVal)}</td>
-      <td class="brok-td">${fmt$(capital)}</td>
       <td class="brok-td" style="color:${dayColor}">
         ${dayChg$ != null ? `${dayChg$>=0?'+':''}${fmt$(dayChg$)}<br><span style="font-size:11px">${dayPct>=0?'+':''}${dayPct.toFixed(2)}%</span>` : '—'}
       </td>
@@ -2052,6 +2069,9 @@ function renderActivePlays(plays) {
       <td class="brok-td" style="font-size:11px">
         <span style="color:#dc2626">▼ ${fmt$(p.stop_loss)}</span><br>
         <span style="color:#16a34a">▲ ${fmt$(p.take_profit)}</span>
+      </td>
+      <td class="brok-td" style="font-size:11px;color:#6b7280">
+        ${entryDateStr}<br><span style="font-weight:600;color:#374151">${timeHeld(p.entry_date)}</span>
       </td>
       <td class="brok-td">
         <button onclick="openClosePlay(${p.id})" class="btn btn-danger text-xs py-1 px-2">Close</button>

@@ -274,7 +274,7 @@ def _find_alpaca_exit_price(client, symbol: str, entry_date: str, direction: str
         if after_dt:
             params["after"] = after_dt
 
-        orders = client._trading.get_orders(filter=GetOrdersRequest(**params))
+        orders = client.trading.get_orders(filter=GetOrdersRequest(**params))
         for order in orders:
             side = str(getattr(order, "side", "")).lower()
             status = str(getattr(order, "status", "")).lower()
@@ -1328,7 +1328,7 @@ def create_play(body: PlayCreate):
                     time_in_force=TimeInForce.DAY,
                     limit_price=body.entry_price,
                 )
-                order = client._trading.submit_order(order_req)
+                order = client.trading.submit_order(order_req)
                 alpaca_order_id = str(order.id)
                 status = "ACTIVE"
         except Exception:
