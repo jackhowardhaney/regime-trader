@@ -155,6 +155,25 @@ def init_db():
         play_cols = [r[1] for r in conn.execute("PRAGMA table_info(plays)").fetchall()]
         if "source" not in play_cols:
             conn.execute("ALTER TABLE plays ADD COLUMN source TEXT DEFAULT 'scanner'")
+        if "exit_reason" not in play_cols:
+            conn.execute("ALTER TABLE plays ADD COLUMN exit_reason TEXT")
+        if "bt_win_rate" not in play_cols:
+            conn.execute("ALTER TABLE plays ADD COLUMN bt_win_rate REAL")
+        if "bt_qualified" not in play_cols:
+            conn.execute("ALTER TABLE plays ADD COLUMN bt_qualified INTEGER DEFAULT 0")
+        if "reentry_flag" not in play_cols:
+            conn.execute("ALTER TABLE plays ADD COLUMN reentry_flag INTEGER DEFAULT 0")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS signal_performance (
+                signal TEXT NOT NULL,
+                direction TEXT NOT NULL DEFAULT 'LONG',
+                n_trades INTEGER DEFAULT 0,
+                n_wins INTEGER DEFAULT 0,
+                total_pnl REAL DEFAULT 0.0,
+                updated_at TEXT DEFAULT (datetime('now')),
+                PRIMARY KEY (signal, direction)
+            );
+        """)
 
 
 _daily_scan_lock = threading.Lock()
@@ -354,16 +373,43 @@ def _sync_alpaca_plays():
                                 pnl_pct = round(pnl / (entry_p * shares) * 100, 2)
                             else:
                                 pnl = pnl_pct = None
+                            # Determine exit reason
+                            exit_reason = "unknown"
+                            if exit_price is not None:
+                                stop_l  = float(play["stop_loss"]  or 0)
+                                take_p  = float(play["take_profit"] or 0)
+                                if stop_l > 0 and exit_price <= stop_l * 1.02:
+                                    exit_reason = "stop_hit"
+                                elif take_p > 0 and exit_price >= take_p * 0.98:
+                                    exit_reason = "target_hit"
+                            reentry_flag = 1 if exit_reason == "target_hit" and pnl and pnl > 0 else 0
                             conn.execute(
                                 """UPDATE plays SET status='CLOSED', exit_price=?,
-                                   exit_date=?, pnl=?, pnl_pct=? WHERE id=?""",
+                                   exit_date=?, pnl=?, pnl_pct=?, exit_reason=?, reentry_flag=? WHERE id=?""",
                                 (exit_price,
                                  datetime.utcnow().isoformat()[:10],
-                                 pnl, pnl_pct, play["id"]),
+                                 pnl, pnl_pct, exit_reason, reentry_flag, play["id"]),
                             )
+                            if pnl is not None:
+                                _update_signal_performance(conn, play["signal"] or "", play["direction"] or "LONG", pnl)
         except Exception:
             pass
         time.sleep(600)  # run every 10 minutes
+
+
+def _update_signal_performance(conn, signal: str, direction: str, pnl: float) -> None:
+    if not signal or signal == "auto-sync":
+        return
+    is_win = 1 if pnl > 0 else 0
+    conn.execute("""
+        INSERT INTO signal_performance (signal, direction, n_trades, n_wins, total_pnl, updated_at)
+        VALUES (?, ?, 1, ?, ?, datetime('now'))
+        ON CONFLICT(signal, direction) DO UPDATE SET
+            n_trades = n_trades + 1,
+            n_wins = n_wins + ?,
+            total_pnl = total_pnl + ?,
+            updated_at = datetime('now')
+    """, (signal, direction, is_win, pnl, is_win, pnl))
 
 
 # ── Pydantic models ────────────────────────────────────────────────
@@ -383,6 +429,8 @@ class PlayCreate(BaseModel):
     notes: Optional[str] = None
     submit_order: bool = False
     source: Optional[str] = "scanner"
+    bt_win_rate: Optional[float] = None
+    bt_qualified: Optional[int] = None
 
 
 class PlayUpdate(BaseModel):
@@ -1337,11 +1385,12 @@ def create_play(body: PlayCreate):
     with get_db() as conn:
         cur = conn.execute(
             """INSERT INTO plays (symbol,direction,status,entry_price,stop_loss,take_profit,
-               shares,entry_date,signal,notes,alpaca_order_id,source)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+               shares,entry_date,signal,notes,alpaca_order_id,source,bt_win_rate,bt_qualified)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (sym, body.direction, status, body.entry_price, body.stop_loss,
              body.take_profit, body.shares, datetime.utcnow().isoformat(),
-             body.signal, body.notes, alpaca_order_id, body.source or "scanner"),
+             body.signal, body.notes, alpaca_order_id, body.source or "scanner",
+             body.bt_win_rate, body.bt_qualified),
         )
         pid = cur.lastrowid
 
@@ -1509,6 +1558,30 @@ def history_metrics():
         "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0,
         "monthly": [{"month": k, "pnl": round(v, 2)} for k, v in sorted(monthly.items())],
     }
+
+
+@app.get("/api/signal-performance")
+def signal_performance():
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT signal, direction, n_trades, n_wins, total_pnl,
+                   CASE WHEN n_trades > 0 THEN ROUND(n_wins * 100.0 / n_trades, 1) ELSE 0 END as win_rate,
+                   CASE WHEN n_trades > 0 THEN ROUND(total_pnl / n_trades, 2) ELSE 0 END as avg_pnl,
+                   updated_at
+            FROM signal_performance ORDER BY n_trades DESC
+        """).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/reentry-candidates")
+def reentry_candidates():
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT symbol, direction, signal, exit_price, pnl, exit_date
+            FROM plays WHERE reentry_flag=1 AND status='CLOSED'
+            ORDER BY exit_date DESC LIMIT 20
+        """).fetchall()
+    return [dict(r) for r in rows]
 
 
 @app.get("/api/history/export")

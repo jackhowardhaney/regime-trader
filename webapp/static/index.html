@@ -878,6 +878,31 @@
       </tbody>
     </table>
   </div>
+
+  <!-- Signal Performance -->
+  <div class="card mt-5">
+    <div class="px-5 py-4 border-b border-gray-100">
+      <h3 class="font-semibold text-gray-900">Signal Performance</h3>
+      <p class="text-xs text-gray-500 mt-0.5">Win rate and P&amp;L by signal type — updated as positions close</p>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr style="background:#f8fafc">
+            <th class="text-left px-4 py-3 text-xs font-semibold text-gray-500">Signal</th>
+            <th class="text-center px-4 py-3 text-xs font-semibold text-gray-500">Dir</th>
+            <th class="text-right px-4 py-3 text-xs font-semibold text-gray-500">Trades</th>
+            <th class="text-right px-4 py-3 text-xs font-semibold text-gray-500">Win Rate</th>
+            <th class="text-right px-4 py-3 text-xs font-semibold text-gray-500">Avg P&amp;L</th>
+            <th class="text-right px-4 py-3 text-xs font-semibold text-gray-500">Total P&amp;L</th>
+          </tr>
+        </thead>
+        <tbody id="sig-perf-body">
+          <tr><td colspan="6" class="text-center py-6 text-gray-400">No closed trades yet</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 </main>
@@ -2828,6 +2853,32 @@ async function loadHistory() {
     renderHistoryMetrics(metrics);
     renderHistoryChart(metrics.monthly||[]);
     renderHistoryTable();
+  } catch(e) {}
+  loadSignalPerformance();
+}
+
+async function loadSignalPerformance() {
+  try {
+    const rows = await api('/api/signal-performance');
+    const tbody = document.getElementById('sig-perf-body');
+    if (!rows.length) return;
+    tbody.innerHTML = rows.map(r => {
+      const wrColor = r.win_rate >= 55 ? '#16a34a' : r.win_rate >= 45 ? '#d97706' : '#dc2626';
+      const pnlColor = r.total_pnl >= 0 ? '#16a34a' : '#dc2626';
+      const avgColor = r.avg_pnl >= 0 ? '#16a34a' : '#dc2626';
+      return `<tr style="border-top:1px solid #f3f4f6">
+        <td class="px-4 py-2.5 font-medium">${r.signal}</td>
+        <td class="px-4 py-2.5 text-center">
+          <span style="font-size:11px;padding:1px 8px;border-radius:99px;font-weight:600;
+            background:${r.direction==='LONG'?'#dcfce7':'#fee2e2'};
+            color:${r.direction==='LONG'?'#16a34a':'#dc2626'}">${r.direction}</span>
+        </td>
+        <td class="px-4 py-2.5 text-right">${r.n_trades}</td>
+        <td class="px-4 py-2.5 text-right font-semibold" style="color:${wrColor}">${r.win_rate}%</td>
+        <td class="px-4 py-2.5 text-right font-mono" style="color:${avgColor}">${r.avg_pnl>=0?'+':''}${fmt$(r.avg_pnl)}</td>
+        <td class="px-4 py-2.5 text-right font-mono" style="color:${pnlColor}">${r.total_pnl>=0?'+':''}${fmt$(r.total_pnl)}</td>
+      </tr>`;
+    }).join('');
   } catch(e) {}
 }
 

@@ -210,23 +210,29 @@ def _update_ratio(scanner_pct: float, watchlist_pct: float) -> None:
 
 # ── Play recording ────────────────────────────────────────────────────────────
 
-def _record_play(symbol, direction, entry, stop, target, shares, signal, notes, source):
+def _record_play(symbol, direction, entry, stop, target, shares, signal, notes, source,
+                 bt_win_rate=None, bt_qualified=None):
     if not WEBAPP_URL:
         return
     try:
-        _api_post("/api/plays", {
+        body = {
             "symbol": symbol, "direction": direction,
             "entry_price": entry, "stop_loss": stop, "take_profit": target,
             "shares": shares, "signal": signal, "notes": notes,
             "submit_order": False, "source": source,
-        })
+        }
+        if bt_win_rate is not None:
+            body["bt_win_rate"] = bt_win_rate
+        if bt_qualified is not None:
+            body["bt_qualified"] = bt_qualified
+        _api_post("/api/plays", body)
     except Exception as e:
         print(f"    Warning: dashboard record failed: {e}")
 
 
 # ── Entry functions ───────────────────────────────────────────────────────────
 
-def _enter_scanner_play(candidate, executor, client, equity, buying_power_ref, excluded):
+def _enter_scanner_play(candidate, executor, client, equity, buying_power_ref, excluded, bt_cache):
     """Scanner logic: broad universe, looser stops, standard risk."""
     sym   = candidate["symbol"]
     bars  = candidate["_bars"]
@@ -260,6 +266,11 @@ def _enter_scanner_play(candidate, executor, client, equity, buying_power_ref, e
     signals = candidate.get("firing_signals", [])
     score   = candidate.get("score", 0)
 
+    # BT gate
+    passes, bt_wr, bt_qual = _bt_passes(sym, score, bt_cache)
+    if not passes:
+        return False
+
     try:
         sig = Signal(
             symbol=sym, direction="LONG", confidence=score / 100.0,
@@ -273,7 +284,8 @@ def _enter_scanner_play(candidate, executor, client, equity, buying_power_ref, e
         executor.submit_bracket_order(sig)
         _record_play(sym, "LONG", price, stop, target, shares,
                      signals[0] if signals else "composite",
-                     f"scanner score={score} signals={','.join(signals)}", "scanner")
+                     f"scanner score={score} signals={','.join(signals)}", "scanner",
+                     bt_win_rate=bt_wr, bt_qualified=bt_qual)
         print(f"  ✓ SCANNER  LONG {sym:<8} score={score}  {shares}sh @ ${price:.2f}"
               f"  stop=${stop:.2f}  target=${target:.2f}  R:R={round((target-price)/(price-stop),2)}:1")
         excluded.add(sym)
@@ -283,7 +295,7 @@ def _enter_scanner_play(candidate, executor, client, equity, buying_power_ref, e
         return False
 
 
-def _enter_watchlist_play(wl_candidate, executor, client, equity, buying_power_ref, excluded, fetcher, start, end):
+def _enter_watchlist_play(wl_candidate, executor, client, equity, buying_power_ref, excluded, fetcher, start, end, bt_cache):
     """
     Watchlist logic: curated symbols, tighter stops (ATR×1.2), slightly higher
     risk (5.5%) — conviction earns precision over breathing room.
@@ -332,6 +344,11 @@ def _enter_watchlist_play(wl_candidate, executor, client, equity, buying_power_r
 
     signal_name = wl_candidate.get("bsh", "BUY").lower() + "_watchlist"
 
+    # BT gate
+    passes, bt_wr, bt_qual = _bt_passes(sym, blend_score, bt_cache)
+    if not passes:
+        return False
+
     try:
         sig = Signal(
             symbol=sym, direction="LONG", confidence=min(1.0, blend_score / 100.0),
@@ -346,7 +363,8 @@ def _enter_watchlist_play(wl_candidate, executor, client, equity, buying_power_r
         _record_play(sym, "LONG", price, stop, target, shares,
                      "watchlist_blend",
                      f"watchlist blend={blend_score:.1f} scanner={scanner_score} tight_stop=ATR×{WATCHLIST_ATR_STOP}",
-                     "watchlist")
+                     "watchlist",
+                     bt_win_rate=bt_wr, bt_qualified=bt_qual)
         rr = round((target - price) / (price - stop), 2)
         print(f"  ✓ WATCHLIST LONG {sym:<8} blend={blend_score:.0f} scan={scanner_score}"
               f"  {shares}sh @ ${price:.2f}  stop=${stop:.2f}  target=${target:.2f}  R:R={rr}:1")
@@ -358,7 +376,7 @@ def _enter_watchlist_play(wl_candidate, executor, client, equity, buying_power_r
 
 
 def _enter_short_play(candidate, executor, client, equity, buying_power_ref, excluded,
-                       short_exposure_ref, max_short_exposure):
+                       short_exposure_ref, max_short_exposure, bt_cache):
     """
     Short entry: stop ABOVE entry, target BELOW entry.
     Total short notional capped at MAX_SHORT_EXPOSURE_PCT of equity.
@@ -406,6 +424,11 @@ def _enter_short_play(candidate, executor, client, equity, buying_power_ref, exc
     signals = candidate.get("firing_signals", [])
     source  = candidate.get("source", "scanner")
 
+    # BT gate
+    passes, bt_wr, bt_qual = _bt_passes(sym, score, bt_cache)
+    if not passes:
+        return False
+
     try:
         sig = Signal(
             symbol=sym, direction="SHORT", confidence=min(1.0, score / 100.0),
@@ -420,7 +443,8 @@ def _enter_short_play(candidate, executor, client, equity, buying_power_ref, exc
         _record_play(sym, "SHORT", price, stop, target, shares,
                      signals[0] if signals else "short_composite",
                      f"{source} short_score={score:.0f} stop=ATR×{SHORT_ATR_STOP}",
-                     source)
+                     source,
+                     bt_win_rate=bt_wr, bt_qualified=bt_qual)
         short_exposure_ref[0] += cost
         rr = round((price - target) / (stop - price), 2)
         print(f"  ✓ SHORT  [{source}] {sym:<8} score={score:.0f}  {shares}sh @ ${price:.2f}"
@@ -430,6 +454,25 @@ def _enter_short_play(candidate, executor, client, equity, buying_power_ref, exc
     except Exception as e:
         print(f"  ✗ SHORT  {sym}: {e}")
         return False
+
+
+# ── BT gate helper ───────────────────────────────────────────────────────────
+
+def _bt_passes(sym: str, score: float, bt_cache: dict) -> tuple[bool, float, int]:
+    """Returns (passes, bt_win_rate, bt_qualified). No BT data = neutral (passes)."""
+    bt = bt_cache.get(sym, {})
+    if not bt.get("tested", False):
+        return True, 0.0, 0  # no data, don't block
+    qualified = bool(bt.get("qualified"))
+    win_rate  = float(bt.get("win_rate") or 0)
+    if qualified:
+        return True, win_rate, 1
+    # Failed BT — allow only if very high conviction
+    if score >= 82:
+        print(f"    BT gate: {sym} failed BT (wr={win_rate:.0f}%) but score={score} >= 82 — override")
+        return True, win_rate, 0
+    print(f"    BT gate: {sym} failed BT (wr={win_rate:.0f}%, fail={bt.get('fail_reason','')}) — SKIP")
+    return False, win_rate, 0
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -469,6 +512,18 @@ def main():
     equity       = float(acct["equity"])
     buying_power = float(acct["buying_power"])
     bp_ref       = [buying_power]   # mutable ref passed into entry functions
+
+    # Load BT cache — one API call, then dict lookups per entry
+    bt_cache = {}
+    try:
+        bt_rows = _api_get("/api/scanner/backtest/results")
+        for row in (bt_rows if isinstance(bt_rows, list) else []):
+            sym_key = row.get("symbol")
+            if sym_key:
+                bt_cache[sym_key] = {**row, "tested": True}
+        print(f"  BT cache loaded: {len(bt_cache)} symbols")
+    except Exception as e:
+        print(f"  Warning: could not load BT cache: {e}")
 
     all_positions = client.get_positions()
     held    = {p["symbol"] for p in all_positions}
@@ -554,7 +609,7 @@ def main():
             for cand in long_cands:
                 if scanner_entered >= scanner_slots:
                     break
-                if _enter_scanner_play(cand, executor, client, equity, bp_ref, excluded):
+                if _enter_scanner_play(cand, executor, client, equity, bp_ref, excluded, bt_cache):
                     scanner_entered += 1
 
     # ══════════════════════════════════════════════════════════════════
@@ -578,7 +633,7 @@ def main():
             for cand in wl_candidates:
                 if watchlist_entered >= watchlist_slots:
                     break
-                if _enter_watchlist_play(cand, executor, client, equity, bp_ref, excluded, fetcher, start, end):
+                if _enter_watchlist_play(cand, executor, client, equity, bp_ref, excluded, fetcher, start, end, bt_cache):
                     watchlist_entered += 1
         except Exception as e:
             print(f"   Watchlist scan failed: {e}")
@@ -632,7 +687,7 @@ def main():
             if short_exposure_ref[0] >= max_short_exposure:
                 break
             if _enter_short_play(cand, executor, client, equity, bp_ref, excluded,
-                                  short_exposure_ref, max_short_exposure):
+                                  short_exposure_ref, max_short_exposure, bt_cache):
                 shorts_entered += 1
 
     # ══════════════════════════════════════════════════════════════════
