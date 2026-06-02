@@ -1405,19 +1405,26 @@ def blend_analysis():
 # ── Plays routes ───────────────────────────────────────────────────
 @app.get("/api/plays/equity-curve")
 def plays_equity_curve():
-    """Account equity over time from Alpaca portfolio history (daily snapshots)."""
-    client = get_alpaca_client()
-    if not client:
+    """Account equity over time — daily snapshots from Alpaca portfolio history."""
+    api_key    = os.getenv("ALPACA_API_KEY", "")
+    api_secret = os.getenv("ALPACA_SECRET_KEY", "")
+    if not api_key or not api_secret:
         return {"dates": [], "values": [], "starting": 10000.0}
     try:
-        from alpaca.trading.requests import PortfolioHistoryRequest
-        history = client.trading.get_portfolio_history(
-            filter=PortfolioHistoryRequest(period="1M", timeframe="1D")
+        import urllib.request as _ur
+        import urllib.parse as _up
+        base = "https://paper-api.alpaca.markets/v2/account/portfolio/history"
+        params = _up.urlencode({"period": "1M", "timeframe": "1D", "extended_hours": "false"})
+        req = _ur.Request(
+            f"{base}?{params}",
+            headers={"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": api_secret},
         )
-        timestamps = history.timestamp or []
-        equities   = history.equity   or []
+        with _ur.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        timestamps = data.get("timestamp") or []
+        equities   = data.get("equity")    or []
         pairs = [
-            (datetime.utcfromtimestamp(t).strftime("%Y-%m-%d"), round(float(e), 2))
+            (datetime.utcfromtimestamp(t).strftime("%b %-d"), round(float(e), 2))
             for t, e in zip(timestamps, equities)
             if e is not None and float(e) > 0
         ]
